@@ -206,6 +206,31 @@ class MockLibBMC(MockSharedLib):
     'BMCVersionString',
   ]
 
+class MockLibPCIe16Interface(MockSharedLib):
+  """Mock BNS SDK
+  """
+  libs = ['PCIe16Interface']
+  functions = [
+    'ComputeTF',
+    'Constructor',
+    'Deconstructor',
+    'GetCurSeqImage',
+    'GetImageSize',
+    'GetInternalTemp',
+    'GetSLMPower',
+    'GetTIFFInfo',
+    'LoadLUTFile',
+    'LoadSequence',
+    'ReadTIFF',
+    'SLMPower',
+    'SetSequencingRate',
+    'SetTrueFrames',
+    'StartSequence',
+    'StopSequence',
+    'WriteCal',
+    'WriteImage',
+  ]
+
 class MockLibpvcam(MockSharedLib):
   """Mock pvcam's SDK for microscope.cameras.pvcam.
   """

@@ -33,3 +33,8 @@ Lasers
 - Cobolt (:class:`microscope.lasers.cobolt`)
 - Coherent Sapphire (:class:`microscope.lasers.saphhire`)
 - Omicron Deepstar (:class:`microscope.lasers.deepstar`)
+
+Spatial Light Modulators
+------------------------
+
+- Boulder Nonlinear Systems / Meadowlark Optics (:class:`microscope.slm.bns`)
