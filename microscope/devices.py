@@ -25,6 +25,7 @@ device may be served from a separate process, or even from a different PC.
 """
 
 import abc
+import contextlib
 import functools
 import itertools
 import logging
@@ -1059,3 +1060,21 @@ class FilterWheelBase(Device):
     @Pyro4.expose
     def get_filters(self):
         return self._filters.items()
+
+
+@contextlib.contextmanager
+def enabled_device(device):
+    """Context manager to enable/disable device.
+
+    Enables a device for a `with` context and returns to its state at
+    exit.
+    """
+    was_enabled = device.enabled
+    if was_enabled:
+        yield device
+    else:
+        try:
+            device.enable()
+            yield device
+        finally:
+            device.disable()
