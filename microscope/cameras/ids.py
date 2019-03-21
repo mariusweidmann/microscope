@@ -95,6 +95,8 @@ class IDSuEye(microscope.devices.CameraDevice):
                 raise RuntimeError("No camera found with serial number '%s'"
                                    % serial_number)
 
+    def initialize(self):
+        pass # Already done in __init__
 
     def _on_enable(self):
         ## InitCamera modifies the value of hCam.
@@ -113,3 +115,23 @@ class IDSuEye(microscope.devices.CameraDevice):
     def _on_shutdown(self):
         if self.enabled:
             self.disable()
+
+    ## TODO
+    def abort(self):
+        pass
+    def _fetch_data(self):
+        pass
+    def set_exposure_time(self, value: float) -> None:
+        pass
+    def _get_sensor_shape(self) -> Tuple[int, int]:
+        pass
+    def _get_binning(self) -> Tuple[int, int]:
+        pass
+    def _set_binning(self, h_bin: int, v_bin: int) -> None:
+        pass
+    def _get_roi(self) -> Tuple[int, int, int, int]:
+        pass
+    def _set_roit(self, left: int, top: int, width:int, height:int) -> None:
+        pass
+    def soft_trigger(self) -> None:
+        pass
