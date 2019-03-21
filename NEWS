@@ -4,6 +4,10 @@ python-microscope releases.
 Version 0.3.0 (yyyy/mm/dd)
 --------------------------
 
+* New hardware supported:
+
+  * IDS uEye cameras
+
 * `CoboltLaser` now has a default value for its `baud` argument.
 
 * `LaserDevice.set_power_mw` now clips the set value to the device

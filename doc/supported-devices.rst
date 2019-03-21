@@ -15,6 +15,7 @@ Cameras
 
 - Andor (:class:`microscope.cameras.andorsdk3`)
 - Photometrics PVCAM (:class:`microscope.cameras.pvcam`)
+- IDS uEye (:class:`microscope.cameras.ids`)
 
 Deformable Mirrors
 ------------------
