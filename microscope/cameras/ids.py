@@ -23,6 +23,8 @@
 
 import ctypes
 
+from typing import Tuple
+
 from pyueye import ueye
 import Pyro4
 
@@ -71,7 +73,7 @@ class IDSuEye(microscope.devices.CameraDevice):
         ## looks like it.
         self._hCam = ueye.HIDS()
 
-        n_cameras = ctypes.c_uint(0)
+        n_cameras = ctypes.c_int(0)
         if ueye.is_GetNumberOfCameras(n_cameras) != ueye.IS_SUCCESS:
             raise RuntimeError('failed to get number of cameras')
         elif not n_cameras:
@@ -79,10 +81,9 @@ class IDSuEye(microscope.devices.CameraDevice):
 
         if serial_number is None:
             ## If using zero as device ID for initialisation, the next
-            ## available camera is picked.
+            ## available camera is picked, and enable() will set hCam
+            ## with the correct device ID.
             self._hCam = ueye.HIDS(0)
-            self.enable() # also sets hCam with a device ID
-            self.disable()
         else:
             camera_list = ueye.UEYE_CAMERA_LIST()
             camera_list.dwCount = ctypes.c_uint(n_cameras.value)
@@ -95,22 +96,58 @@ class IDSuEye(microscope.devices.CameraDevice):
                 raise RuntimeError("No camera found with serial number '%s'"
                                    % serial_number)
 
+        self.enable()
+        self._sensor_shape = self._read_sensor_shape() # type: Tuple[int, int]
+        self._exposure_time = self._read_exposure_time() # type: float
+        self._exposure_range = self._read_exposure_range() # type: Tuple[float, float]
+        self.disable()
+
+    def _read_sensor_shape(self) -> Tuple[int, int]:
+        ## Only works when camera is enabled
+        sensor_info = ueye.SENSORINFO()
+        status = ueye.is_GetSensorInfo(self._hCam, sensor_info)
+        if status != ueye.IS_SUCCESS:
+            raise RuntimeError('failed to to read the sensor information')
+        return (sensor_info.nMaxWidth.value, sensor_info.nMaxHeight.value)
+
+    def _read_exposure_time(self) -> float:
+        ## Only works when camera is enabled
+        time_msec = ctypes.c_double()
+        status = ueye.is_Exposure(self._hCam, ueye.IS_EXPOSURE_CMD_GET_EXPOSURE,
+                                  time_msec, ctypes.sizeof(time_msec))
+        if status != ueye.IS_SUCCESS:
+            raise RuntimeError('failed to to read exposure time')
+        return (time_msec * 1000)
+
+    def _read_exposure_range(self) -> Tuple[float, float]:
+        ## Only works when camera is enabled
+        range_msec = (ctypes.c_double()*3)() # min, max, inc
+        status = ueye.is_Exposure(self._hCam,
+                                  ueye.IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE,
+                                  range_msec, ctypes.sizeof(range_msec))
+        if status != ueye.IS_SUCCESS:
+            raise RuntimeError('failed to to read exposure time range')
+        return (range_msec[0]*1000, range_msec[1]*1000)
+
+
     def initialize(self):
         pass # Already done in __init__
 
-    def _on_enable(self):
+
+    def _on_enable(self) -> bool:
         ## InitCamera modifies the value of hCam.
         self._hCam = ueye.HIDS(self._hCam | ueye.IS_USE_DEVICE_ID)
         status = ueye.is_InitCamera(self._hCam, None)
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to init camera, returned %d' % status)
+        return True
 
     def _on_disable(self):
         status = ueye.is_ExitCamera(self._hCam)
         if status != ueye.IS_SUCCESS:
             if status == ueye.IS_INVALID_CAMERA_HANDLE and not self.enabled:
-            raise RuntimeError('failed to init camera, returned %d' % status)
-        super().disable()
+                raise RuntimeError('failed to init camera, returned %d' % status)
+        super()._on_disable()
 
     def _on_shutdown(self):
         if self.enabled:
@@ -123,8 +160,11 @@ class IDSuEye(microscope.devices.CameraDevice):
         pass
     def set_exposure_time(self, value: float) -> None:
         pass
+
     def _get_sensor_shape(self) -> Tuple[int, int]:
-        pass
+        return self._sensor_shape
+
+
     def _get_binning(self) -> Tuple[int, int]:
         pass
     def _set_binning(self, h_bin: int, v_bin: int) -> None:
@@ -135,3 +175,20 @@ class IDSuEye(microscope.devices.CameraDevice):
         pass
     def soft_trigger(self) -> None:
         pass
+
+    # def _get_error_str(self, error_code: int):
+    #     """
+    #     """
+    #     raise NotImplementedError('is_GetError')
+    #     err_msg = ...
+    #     status = ueye.is_GetError(self._hCam, ctypes.c_int(error_code), err_msg)
+    #     if status == ueye.IS_SUCCESS:
+    #         return err_msg.get message
+    #     elif status == ueye.IS_INVALID_CAMERA_HANDLE:
+    #         raise RuntimeError('Invalid camera handle')
+    #     elif status == ueye.IS_INVALID_PARAMETER:
+    #         raise RuntimeError('Invalid parameter: outside valid range, not'
+    #                            ' supported for this sensor, or not available'
+    #                            ' in current mode.')
+    #     else: # IS_NO_SUCCESS or something we don't know about
+    #         raise RuntimeError('Failed to retrieve error message')
