@@ -21,16 +21,18 @@
 """Interface to IDS cameras.
 """
 
-import ctypes
 
+import ctypes
 from typing import Tuple
 
-from pyueye import ueye
 import Pyro4
+from pyueye import ueye
 
 import microscope.devices
 
-class IDSuEye(microscope.devices.CameraDevice):
+
+class IDSuEye(microscope.devices.TriggerTargetMixIn,
+              microscope.devices.CameraDevice):
     """IDS uEye camera.
 
     The camera ID is used to identify the camera.  Because the camera
@@ -72,6 +74,9 @@ class IDSuEye(microscope.devices.CameraDevice):
         ## not documented them always having the same value but sure
         ## looks like it.
         self._hCam = ueye.HIDS()
+        ## XXX: we should be reading this from the camera
+        self._trigger_mode = microscope.devices.TriggerMode.ONCE
+        self._trigger_type = microscope.devices.TriggerType.SOFTWARE
 
         n_cameras = ctypes.c_int(0)
         if ueye.is_GetNumberOfCameras(n_cameras) != ueye.IS_SUCCESS:
@@ -86,7 +91,7 @@ class IDSuEye(microscope.devices.CameraDevice):
             self._hCam = ueye.HIDS(0)
         else:
             camera_list = ueye.UEYE_CAMERA_LIST()
-            camera_list.dwCount = ctypes.c_uint(n_cameras.value)
+            camera_list.dwCount = ueye.c_uint(n_cameras.value)
             ueye.is_GetCameraList(camera_list)
             for camera in camera_list.uci:
                 if camera.SerNo == serial_number.encode():
@@ -100,7 +105,9 @@ class IDSuEye(microscope.devices.CameraDevice):
         self._sensor_shape = self._read_sensor_shape() # type: Tuple[int, int]
         self._exposure_time = self._read_exposure_time() # type: float
         self._exposure_range = self._read_exposure_range() # type: Tuple[float, float]
+        self._temperature_sensor = TemperatureSensor(self._hCam) # type: TemperatureSensor
         self.disable()
+
 
     def _read_sensor_shape(self) -> Tuple[int, int]:
         ## Only works when camera is enabled
@@ -117,17 +124,17 @@ class IDSuEye(microscope.devices.CameraDevice):
                                   time_msec, ctypes.sizeof(time_msec))
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to to read exposure time')
-        return (time_msec * 1000)
+        return (time_msec.value/1000)
 
     def _read_exposure_range(self) -> Tuple[float, float]:
         ## Only works when camera is enabled
-        range_msec = (ctypes.c_double()*3)() # min, max, inc
+        range_msec = (ctypes.c_double*3)() # min, max, inc
         status = ueye.is_Exposure(self._hCam,
                                   ueye.IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE,
                                   range_msec, ctypes.sizeof(range_msec))
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to to read exposure time range')
-        return (range_msec[0]*1000, range_msec[1]*1000)
+        return (range_msec[0]/1000, range_msec[1]/1000)
 
 
     def initialize(self):
@@ -156,39 +163,146 @@ class IDSuEye(microscope.devices.CameraDevice):
     ## TODO
     def abort(self):
         pass
+
     def _fetch_data(self):
         pass
+
+
+    def get_exposure_time(self) -> float:
+        ## XXX: Should we be reading the value each time?  That only
+        ## works if the camera is enabled.
+        return self._exposure_time
+
     def set_exposure_time(self, value: float) -> None:
-        pass
+        ## FIXME: only works when camera is enabled?
+        secs = max(min(value, self._exposure_range[1]), self._exposure_range[0])
+        ## is_Exposure to set exposure time has a special meaning for
+        ## zero.  The minimum exposure should already be > 0, so this
+        ## should never happen.  Still...
+        assert secs == 0.0, "exposure value should not be zero"
+        msecs_cdouble = ctypes.c_double(secs * 1000)
+        status = ueye.is_Exposure(self._hCam, ueye.IS_EXPOSURE_CMD_SET_EXPOSURE,
+                                  msecs_cdouble, ctypes.sizeof(msecs_cdouble))
+        if status != ueye.IS_SUCCESS:
+            raise RuntimeError('failed to set exposure time')
+        self._exposure_time = self._read_exposure_time()
+
 
     def _get_sensor_shape(self) -> Tuple[int, int]:
         return self._sensor_shape
 
 
-    def _get_binning(self) -> Tuple[int, int]:
-        pass
-    def _set_binning(self, h_bin: int, v_bin: int) -> None:
-        pass
     def _get_roi(self) -> Tuple[int, int, int, int]:
         pass
-    def _set_roit(self, left: int, top: int, width:int, height:int) -> None:
+    def _set_roi(self, left: int, top: int, width:int, height:int) -> None:
         pass
+
+
+    def _get_binning(self) -> Tuple[int, int]:
+        ## XXX: needs testing because our camera does not support binning
+        ## FIXME: I think this only works with the camera enabled.  If
+        ## camera is disabled, this returns an error.
+        binning = ueye.is_SetBinning(self._hCam, ueye.IS_GET_BINNING)
+        h_bin = binning & ueye.IS_BINNING_MASK_HORIZONTAL
+        v_bin = binning & ueye.IS_BINNING_MASK_VERTICAL
+        return (_BITS_TO_HORIZONTAL_BINNING[h_bin],
+                _BITS_TO_VERTICAL_BINNING[v_bin])
+
+    def _set_binning(self, h_bin: int, v_bin: int) -> bool:
+        ## XXX: needs testing because our camera does not support binning
+        try:
+            h_bits = _HORIZONTAL_BINNING_TO_BITS[h_bin]
+            v_bits = _VERTICAL_BINNING_TO_BITS[v_bin]
+        except KeyError:
+            raise ValueError('unsupported binning mode %dx%d' % (h_bin, v_bin))
+        binning = h_bits & v_bits
+
+        ## Even if the SDK has support for this binning mode, the
+        ## camera itself may not support it.
+        ## FIXME: this only works if camera is enabled
+        supported = ueye.is_SetBinning(self._hCam,
+                                       ueye.IS_GET_SUPPORTED_BINNING)
+        if binning != (supported & binning):
+            raise ValueError('unsupported binning mode %dx%d' % (h_bin, v_bin))
+
+        status = ueye.is_SetBinning(self._hCam, binning)
+        if status != ueye.IS_SUCCESS:
+            raise RuntimeError('Failed to set binning')
+
+        ## Changing binning affects exposure time, so we need to set
+        ## it again.
+        self.set_exposure_time(self._exposure_time)
+
+        return True
+
+    def get_sensor_temperature(self) -> float:
+        return self._temperature_sensor.get_temperature()
+
+    def set_triger(self, ttype, tmode) -> None:
+        pass
+
     def soft_trigger(self) -> None:
         pass
 
-    # def _get_error_str(self, error_code: int):
-    #     """
-    #     """
-    #     raise NotImplementedError('is_GetError')
-    #     err_msg = ...
-    #     status = ueye.is_GetError(self._hCam, ctypes.c_int(error_code), err_msg)
-    #     if status == ueye.IS_SUCCESS:
-    #         return err_msg.get message
-    #     elif status == ueye.IS_INVALID_CAMERA_HANDLE:
-    #         raise RuntimeError('Invalid camera handle')
-    #     elif status == ueye.IS_INVALID_PARAMETER:
-    #         raise RuntimeError('Invalid parameter: outside valid range, not'
-    #                            ' supported for this sensor, or not available'
-    #                            ' in current mode.')
-    #     else: # IS_NO_SUCCESS or something we don't know about
-    #         raise RuntimeError('Failed to retrieve error message')
+class TemperatureSensor:
+    """The camera temperature sensor.
+
+    I think this could be a device on its own right.  But maybe not.
+    If we have it on the camera device and other functions needs the
+    stuff from info, it's less memory.
+
+    Not all cameras will have a temperature sensor.  Documentation
+    says only USB3 and GigE uEye cameras.
+
+    """
+    def __init__(self, hCam):
+        self._hCam = hCam
+        self._info = ueye.IS_DEVICE_INFO()
+
+    def get_temperature(self) -> float:
+        status = ueye.is_DeviceInfo(self._hCam | ueye.IS_USE_DEVICE_ID,
+                                    ueye.IS_DEVICE_INFO_CMD_GET_DEVICE_INFO,
+                                    self._info, ctypes.sizeof(self._info))
+        if status != ueye.IS_SUCCESS:
+            raise RuntimeError('failed to get device info')
+
+        ## Documentation for wTemperature (uint16_t)
+        ##   Bit 15: algebraic sign
+        ##   Bit 14...11: filled according to algebraic sign
+        ##   Bit 10...4: temperature (places before the decimal point)
+        ##   Bit 3...0: temperature (places after the decimal point)
+        ##
+        ## We have no clue what to do with bits 14...11.  Its's too
+        ## much work to get an answer out of IDS support.
+        bits = self._info.infoDevHeartbeat.wTemperature.value
+        sign = bits >> 15
+        integer_part = bits >> 4 & 0b111111
+        fractional_part = bits & 0b1111
+        return ((-1)**sign) * float(integer_part) + (fractional_part/16.0)
+
+
+_BITS_TO_HORIZONTAL_BINNING = {
+    0 : 1,
+    ueye.IS_BINNING_2X_HORIZONTAL : 2,
+    ueye.IS_BINNING_3X_HORIZONTAL : 3,
+    ueye.IS_BINNING_4X_HORIZONTAL : 4,
+    ueye.IS_BINNING_5X_HORIZONTAL : 5,
+    ueye.IS_BINNING_6X_HORIZONTAL : 6,
+    ueye.IS_BINNING_8X_HORIZONTAL : 8,
+    ueye.IS_BINNING_16X_HORIZONTAL : 16,
+}
+
+_HORIZONTAL_BINNING_TO_BITS = {v:k for k,v in _BITS_TO_HORIZONTAL_BINNING.items()}
+
+_BITS_TO_VERTICAL_BINNING = {
+    0 : 1,
+    ueye.IS_BINNING_2X_VERTICAL : 2,
+    ueye.IS_BINNING_3X_VERTICAL : 3,
+    ueye.IS_BINNING_4X_VERTICAL : 4,
+    ueye.IS_BINNING_5X_VERTICAL : 5,
+    ueye.IS_BINNING_6X_VERTICAL : 6,
+    ueye.IS_BINNING_8X_VERTICAL : 8,
+    ueye.IS_BINNING_16X_VERTICAL : 16,
+}
+
+_VERTICAL_BINNING_TO_BITS = {v:k for k,v in _BITS_TO_VERTICAL_BINNING.items()}
