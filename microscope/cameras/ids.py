@@ -71,7 +71,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ## hCam is both the camera handler and the device ID.  It's
         ## not documented them always having the same value but sure
         ## looks like it.
-        self._hCam = ueye.HIDS()
+        self._handler = ueye.HIDS()
         ## XXX: we should be reading this from the camera
         self._trigger_mode = microscope.devices.TriggerMode.ONCE
         self._trigger_type = microscope.devices.TriggerType.SOFTWARE
@@ -84,33 +84,51 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
         if serial_number is None:
             ## If using zero as device ID for initialisation, the next
-            ## available camera is picked, and enable() will set hCam
+            ## available camera is picked, and enable() will set handler
             ## with the correct device ID.
-            self._hCam = ueye.HIDS(0)
+            self._handler = ueye.HIDS(0)
         else:
             camera_list = ueye.UEYE_CAMERA_LIST()
             camera_list.dwCount = ueye.c_uint(n_cameras.value)
             ueye.is_GetCameraList(camera_list)
             for camera in camera_list.uci:
                 if camera.SerNo == serial_number.encode():
-                    self._hCam = ueye.HIDS(camera.dwDeviceID.value)
+                    self._handler = ueye.HIDS(camera.dwDeviceID.value)
                     break
             else:
                 raise RuntimeError("No camera found with serial number '%s'"
                                    % serial_number)
 
-        self.enable()
+        ## InitCamera modifies the value of handler.
+        self._handler = ueye.HIDS(self._handler | ueye.IS_USE_DEVICE_ID)
+        status = ueye.is_InitCamera(self._handler, None)
+        if status != ueye.IS_SUCCESS:
+            raise RuntimeError('failed to init camera, returned %d' % status)
+
+        self._device_info = ueye.IS_DEVICE_INFO()
+        self._update_device_info()
         self._sensor_shape = self._read_sensor_shape() # type: Tuple[int, int]
         self._exposure_time = self._read_exposure_time() # type: float
         self._exposure_range = self._read_exposure_range() # type: Tuple[float, float]
-        self._temperature_sensor = TemperatureSensor(self._hCam) # type: TemperatureSensor
+
+        ## Camera starts enabled by default.
+        self.enabled = True
         self.disable()
 
+
+    def _update_device_info(self) -> None:
+        """Update the internal ``_device_info`` property"""
+        status = ueye.is_DeviceInfo(self._handler | ueye.IS_USE_DEVICE_ID,
+                                    ueye.IS_DEVICE_INFO_CMD_GET_DEVICE_INFO,
+                                    self._device_info,
+                                    ctypes.sizeof(self._device_info))
+        if status != ueye.IS_SUCCESS:
+            raise RuntimeError('failed to get device info')
 
     def _read_sensor_shape(self) -> Tuple[int, int]:
         ## Only works when camera is enabled
         sensor_info = ueye.SENSORINFO()
-        status = ueye.is_GetSensorInfo(self._hCam, sensor_info)
+        status = ueye.is_GetSensorInfo(self._handler, sensor_info)
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to to read the sensor information')
         return (sensor_info.nMaxWidth.value, sensor_info.nMaxHeight.value)
@@ -118,7 +136,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
     def _read_exposure_time(self) -> float:
         ## Only works when camera is enabled
         time_msec = ctypes.c_double()
-        status = ueye.is_Exposure(self._hCam, ueye.IS_EXPOSURE_CMD_GET_EXPOSURE,
+        status = ueye.is_Exposure(self._handler, ueye.IS_EXPOSURE_CMD_GET_EXPOSURE,
                                   time_msec, ctypes.sizeof(time_msec))
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to to read exposure time')
@@ -127,7 +145,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
     def _read_exposure_range(self) -> Tuple[float, float]:
         ## Only works when camera is enabled
         range_msec = (ctypes.c_double*3)() # min, max, inc
-        status = ueye.is_Exposure(self._hCam,
+        status = ueye.is_Exposure(self._handler,
                                   ueye.IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE,
                                   range_msec, ctypes.sizeof(range_msec))
         if status != ueye.IS_SUCCESS:
@@ -140,23 +158,27 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
 
     def _on_enable(self) -> bool:
-        ## InitCamera modifies the value of hCam.
-        self._hCam = ueye.HIDS(self._hCam | ueye.IS_USE_DEVICE_ID)
-        status = ueye.is_InitCamera(self._hCam, None)
-        if status != ueye.IS_SUCCESS:
-            raise RuntimeError('failed to init camera, returned %d' % status)
         return True
 
-    def _on_disable(self):
-        status = ueye.is_ExitCamera(self._hCam)
+    def _on_disable(self) -> None:
+        standby_supported = ueye.ulong()
+        status = ueye.is_CameraStatus(self._handler, ueye.IS_STANDBY_SUPPORTED,
+                                      standby_supported)
         if status != ueye.IS_SUCCESS:
-            if status == ueye.IS_INVALID_CAMERA_HANDLE and not self.enabled:
-                raise RuntimeError('failed to init camera, returned %d' % status)
-        super()._on_disable()
+            raise RuntimeError()
+        if not standby_supported.value:
+            raise RuntimeError('not supported')
+        status = ueye.is_CameraStatus(self._handler, ueye.IS_STANDBY,
+                                      ueye.ulong(1))
+        if status != ueye.IS_SUCCESS:
+            raise RuntimeError('failed to enter standby')
 
-    def _on_shutdown(self):
-        if self.enabled:
-            self.disable()
+    def _on_shutdown(self) -> None:
+        status = ueye.is_ExitCamera(self._handler)
+        if status != ueye.IS_SUCCESS:
+            if status == ueye.IS_INVALID_CAMERA_HANDLE:
+                raise RuntimeError('failed to init camera, returned %d'
+                                   % status)
 
     ## TODO
     def abort(self):
@@ -184,7 +206,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ## should never happen.  Still...
         assert secs == 0.0, "exposure value should not be zero"
         msecs_cdouble = ctypes.c_double(secs * 1000)
-        status = ueye.is_Exposure(self._hCam, ueye.IS_EXPOSURE_CMD_SET_EXPOSURE,
+        status = ueye.is_Exposure(self._handler, ueye.IS_EXPOSURE_CMD_SET_EXPOSURE,
                                   msecs_cdouble, ctypes.sizeof(msecs_cdouble))
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to set exposure time')
@@ -205,7 +227,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ## XXX: needs testing because our camera does not support binning
         ## FIXME: I think this only works with the camera enabled.  If
         ## camera is disabled, this returns an error.
-        binning = ueye.is_SetBinning(self._hCam, ueye.IS_GET_BINNING)
+        binning = ueye.is_SetBinning(self._handler, ueye.IS_GET_BINNING)
         h_bin = binning & ueye.IS_BINNING_MASK_HORIZONTAL
         v_bin = binning & ueye.IS_BINNING_MASK_VERTICAL
         return (_BITS_TO_HORIZONTAL_BINNING[h_bin],
@@ -223,12 +245,12 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ## Even if the SDK has support for this binning mode, the
         ## camera itself may not support it.
         ## FIXME: this only works if camera is enabled
-        supported = ueye.is_SetBinning(self._hCam,
+        supported = ueye.is_SetBinning(self._handler,
                                        ueye.IS_GET_SUPPORTED_BINNING)
         if binning != (supported & binning):
             raise ValueError('unsupported binning mode %dx%d' % (h_bin, v_bin))
 
-        status = ueye.is_SetBinning(self._hCam, binning)
+        status = ueye.is_SetBinning(self._handler, binning)
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('Failed to set binning')
 
@@ -238,8 +260,27 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
         return True
 
+
     def get_sensor_temperature(self) -> float:
-        return self._temperature_sensor.get_temperature()
+        """Return camera temperature sensor.
+
+        Not all cameras will have a temperature sensor.  Documentation
+        says only USB3 and GigE uEye cameras.
+        """
+        ## Documentation for wTemperature (uint16_t)
+        ##   Bit 15: algebraic sign
+        ##   Bit 14...11: filled according to algebraic sign
+        ##   Bit 10...4: temperature (places before the decimal point)
+        ##   Bit 3...0: temperature (places after the decimal point)
+        ##
+        ## We have no clue what to do with bits 14...11.
+        self._update_device_info()
+        bits = self._device_info.infoDevHeartbeat.wTemperature.value
+        sign = bits >> 15
+        integer_part = bits >> 4 & 0b111111
+        fractional_part = bits & 0b1111
+        return ((-1)**sign) * float(integer_part) + (fractional_part/16.0)
+
 
     def set_triger(self, ttype, tmode) -> None:
         pass
@@ -265,23 +306,23 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         pid = ueye.c_int()
         ## INT is_AllocImageMem (HIDS hCam, INT width, INT height,
         ##                       INT bitspixel, char** ppcImgMem, INT* pid)
-        status = ueye.is_AllocImageMem(self._hCam, im_size[0], im_size[1],
+        status = ueye.is_AllocImageMem(self._handler, im_size[0], im_size[1],
                                        bitspixel,
                                        buffer.ctypes.data_as(ctypes.c_char_p),
                                        pid)
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to alloc image')
         ## INT is_SetImageMem (HIDS hCam, char* pcImgMem, INT id)
-        status = ueye.is_Set_ImageMem(self._hCam, buffer, pid)
+        status = ueye.is_SetImageMem(self._handler, buffer, pid)
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to set image mem')
-        status = ueye.is_FreezeVideo(self._hCam, ueye.IS_WAIT) # blocking call
+        status = ueye.is_FreezeVideo(self._handler, ueye.IS_WAIT) # blocking call
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to acquire image')
 
     def _get_bits_per_pixel(self):
         """Current number of bits per image pixel."""
-        colormode = ueye.is_SetColorMode(self._hCam, ueye.IS_GET_COLOR_MODE)
+        colormode = ueye.is_SetColorMode(self._handler, ueye.IS_GET_COLOR_MODE)
         try:
             return _COLORMODE_TO_N_BITS[colormode]
         except KeyError:
@@ -289,43 +330,6 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
             ## error status code.
             raise RuntimeError('failed to get "colormode". Error code %d'
                                % colormode)
-
-
-class TemperatureSensor:
-    """The camera temperature sensor.
-
-    I think this could be a device on its own right.  But maybe not.
-    If we have it on the camera device and other functions needs the
-    stuff from info, it's less memory.
-
-    Not all cameras will have a temperature sensor.  Documentation
-    says only USB3 and GigE uEye cameras.
-
-    """
-    def __init__(self, hCam):
-        self._hCam = hCam
-        self._info = ueye.IS_DEVICE_INFO()
-
-    def get_temperature(self) -> float:
-        status = ueye.is_DeviceInfo(self._hCam | ueye.IS_USE_DEVICE_ID,
-                                    ueye.IS_DEVICE_INFO_CMD_GET_DEVICE_INFO,
-                                    self._info, ctypes.sizeof(self._info))
-        if status != ueye.IS_SUCCESS:
-            raise RuntimeError('failed to get device info')
-
-        ## Documentation for wTemperature (uint16_t)
-        ##   Bit 15: algebraic sign
-        ##   Bit 14...11: filled according to algebraic sign
-        ##   Bit 10...4: temperature (places before the decimal point)
-        ##   Bit 3...0: temperature (places after the decimal point)
-        ##
-        ## We have no clue what to do with bits 14...11.  Its's too
-        ## much work to get an answer out of IDS support.
-        bits = self._info.infoDevHeartbeat.wTemperature.value
-        sign = bits >> 15
-        integer_part = bits >> 4 & 0b111111
-        fractional_part = bits & 0b1111
-        return ((-1)**sign) * float(integer_part) + (fractional_part/16.0)
 
 
 _BITS_TO_HORIZONTAL_BINNING = {
@@ -355,22 +359,26 @@ _BITS_TO_VERTICAL_BINNING = {
 _VERTICAL_BINNING_TO_BITS = {v:k for k, v in _BITS_TO_VERTICAL_BINNING.items()}
 
 _COLORMODE_TO_N_BITS = {
-    ueye.IS_CM_MONO8 : 8,
-    ueye.IS_CM_SENSOR_RAW8: 8,
+    ueye.IS_CM_BGR10_PACKED : 32,
+    ueye.IS_CM_BGR565_PACKED : 16,
+    ueye.IS_CM_BGR5_PACKED : 16,
+    ueye.IS_CM_BGR8_PACKED : 24,
+    ueye.IS_CM_BGRA8_PACKED : 32,
+    ueye.IS_CM_BGRY8_PACKED : 32,
+    ueye.IS_CM_CBYCRY_PACKED : 16,
     ueye.IS_CM_MONO12 : 16,
     ueye.IS_CM_MONO16 : 16,
+    ueye.IS_CM_MONO8 : 8,
+    ueye.IS_CM_RGB10_PACKED : 32,
+    ueye.IS_CM_RGB8_PACKED : 24,
+    ueye.IS_CM_RGBA8_PACKED : 32,
+    ueye.IS_CM_RGBY8_PACKED : 32,
+    ueye.IS_CM_SENSOR_RAW10 : 16,
+    ueye.IS_CM_SENSOR_RAW12 : 16,
     ueye.IS_CM_SENSOR_RAW12 : 16,
     ueye.IS_CM_SENSOR_RAW16 : 16,
-    ueye.IS_CM_BGR5_PACKED : 16,
-    ueye.IS_CM_BGR565_PACKED : 16,
+    ueye.IS_CM_SENSOR_RAW16 : 16,
+    ueye.IS_CM_SENSOR_RAW8 : 8,
+    ueye.IS_CM_SENSOR_RAW8: 8,
     ueye.IS_CM_UYVY_PACKED : 16,
-    ueye.IS_CM_CBYCRY_PACKED : 16,
-    ueye.IS_CM_RGB8_PACKED : 24,
-    ueye.IS_CM_BGR8_PACKED : 24,
-    ueye.IS_CM_RGBA8_PACKED : 32,
-    ueye.IS_CM_BGRA8_PACKED : 32,
-    ueye.IS_CM_RGBY8_PACKED : 32,
-    ueye.IS_CM_BGRY8_PACKED : 32,
-    ueye.IS_CM_RGB10_PACKED : 32,
-    ueye.IS_CM_BGR10_PACKED : 32,
 }
