@@ -26,6 +26,7 @@ import ctypes
 from typing import Tuple
 
 import Pyro4
+import numpy as np
 from pyueye import ueye
 
 import microscope.devices
@@ -34,9 +35,6 @@ import microscope.devices
 class IDSuEye(microscope.devices.TriggerTargetMixIn,
               microscope.devices.CameraDevice):
     """IDS uEye camera.
-
-    The camera ID is used to identify the camera.  Because the camera
-    ID can be changed, its value can't be changed halfway through.
 
     Args:
         camera_id (int): the camera ID.  This is the customizable
@@ -137,7 +135,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         return (range_msec[0]/1000, range_msec[1]/1000)
 
 
-    def initialize(self):
+    def initialize(self, *args, **kwargs) -> None:
         pass # Already done in __init__
 
 
@@ -162,6 +160,11 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
     ## TODO
     def abort(self):
+        ## A hardware triggered image acquisition can be cancelled
+        ## using is_StopLiveVideo() if exposure has not started
+        ## yet. If you call is_FreezeVideo() with the IS_WAIT
+        ## parameter, you have to simulate at trigger signal using
+        ## is_ForceTrigger() to cancel the acquisition.
         pass
 
     def _fetch_data(self):
@@ -194,7 +197,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
     def _get_roi(self) -> Tuple[int, int, int, int]:
         pass
-    def _set_roi(self, left: int, top: int, width:int, height:int) -> None:
+    def _set_roi(self, left: int, top: int, width: int, height: int) -> None:
         pass
 
 
@@ -244,6 +247,50 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
     def soft_trigger(self) -> None:
         pass
 
+    ## time_capture =~ exposure_time + (1 / max_frame_rate) but: "Some
+    ## sensors support an overlap trigger mode (see Camera and sensor
+    ## data). This feature allows overlapping the trigger for a new
+    ## image capture with the readout of the previous image"
+
+    def acquire(self) -> np.array:
+        """Blocks and acquires image."""
+        im_size = self.get_sensor_shape()
+        bitspixel = self._get_bits_per_pixel()
+        if bitspixel == 8:
+            dtype = np.uint8
+        else:
+            dtype = np.uint16
+        ## FIXME: what about 32?
+        buffer = np.zeros(im_size, dtype=dtype)
+        pid = ueye.c_int()
+        ## INT is_AllocImageMem (HIDS hCam, INT width, INT height,
+        ##                       INT bitspixel, char** ppcImgMem, INT* pid)
+        status = ueye.is_AllocImageMem(self._hCam, im_size[0], im_size[1],
+                                       bitspixel,
+                                       buffer.ctypes.data_as(ctypes.c_char_p),
+                                       pid)
+        if status != ueye.IS_SUCCESS:
+            raise RuntimeError('failed to alloc image')
+        ## INT is_SetImageMem (HIDS hCam, char* pcImgMem, INT id)
+        status = ueye.is_Set_ImageMem(self._hCam, buffer, pid)
+        if status != ueye.IS_SUCCESS:
+            raise RuntimeError('failed to set image mem')
+        status = ueye.is_FreezeVideo(self._hCam, ueye.IS_WAIT) # blocking call
+        if status != ueye.IS_SUCCESS:
+            raise RuntimeError('failed to acquire image')
+
+    def _get_bits_per_pixel(self):
+        """Current number of bits per image pixel."""
+        colormode = ueye.is_SetColorMode(self._hCam, ueye.IS_GET_COLOR_MODE)
+        try:
+            return _COLORMODE_TO_N_BITS[colormode]
+        except KeyError:
+            ## If it's not a colormode enum value, then it may be an
+            ## error status code.
+            raise RuntimeError('failed to get "colormode". Error code %d'
+                               % colormode)
+
+
 class TemperatureSensor:
     """The camera temperature sensor.
 
@@ -292,7 +339,7 @@ _BITS_TO_HORIZONTAL_BINNING = {
     ueye.IS_BINNING_16X_HORIZONTAL : 16,
 }
 
-_HORIZONTAL_BINNING_TO_BITS = {v:k for k,v in _BITS_TO_HORIZONTAL_BINNING.items()}
+_HORIZONTAL_BINNING_TO_BITS = {v:k for k, v in _BITS_TO_HORIZONTAL_BINNING.items()}
 
 _BITS_TO_VERTICAL_BINNING = {
     0 : 1,
@@ -305,4 +352,25 @@ _BITS_TO_VERTICAL_BINNING = {
     ueye.IS_BINNING_16X_VERTICAL : 16,
 }
 
-_VERTICAL_BINNING_TO_BITS = {v:k for k,v in _BITS_TO_VERTICAL_BINNING.items()}
+_VERTICAL_BINNING_TO_BITS = {v:k for k, v in _BITS_TO_VERTICAL_BINNING.items()}
+
+_COLORMODE_TO_N_BITS = {
+    ueye.IS_CM_MONO8 : 8,
+    ueye.IS_CM_SENSOR_RAW8: 8,
+    ueye.IS_CM_MONO12 : 16,
+    ueye.IS_CM_MONO16 : 16,
+    ueye.IS_CM_SENSOR_RAW12 : 16,
+    ueye.IS_CM_SENSOR_RAW16 : 16,
+    ueye.IS_CM_BGR5_PACKED : 16,
+    ueye.IS_CM_BGR565_PACKED : 16,
+    ueye.IS_CM_UYVY_PACKED : 16,
+    ueye.IS_CM_CBYCRY_PACKED : 16,
+    ueye.IS_CM_RGB8_PACKED : 24,
+    ueye.IS_CM_BGR8_PACKED : 24,
+    ueye.IS_CM_RGBA8_PACKED : 32,
+    ueye.IS_CM_BGRA8_PACKED : 32,
+    ueye.IS_CM_RGBY8_PACKED : 32,
+    ueye.IS_CM_BGRY8_PACKED : 32,
+    ueye.IS_CM_RGB10_PACKED : 32,
+    ueye.IS_CM_BGR10_PACKED : 32,
+}
