@@ -31,11 +31,21 @@ from microscope import devices
 from microscope.devices import keep_acquiring
 from microscope.devices import FilterWheelBase
 
-@Pyro4.expose
 @Pyro4.behavior('single')
 class TestCamera(devices.CameraDevice):
     def __init__(self, *args, **kwargs):
         super(TestCamera, self).__init__(**kwargs)
+        # Binning and ROI
+        self._roi = (0,0,511,511)
+        self._binning = (1,1)
+        self.add_setting('binning', 'tuple',
+                         lambda: self._binning,
+                         lambda val: setattr(self, '_binning', val),
+                         None)
+        self.add_setting('roi', 'tuple',
+                         lambda: self._roi,
+                         lambda val: setattr(self, '_roi', val),
+                         None)
         # Software buffers and parameters for data conversion.
         self._a_setting = 0
         self.add_setting('a_setting', 'int',
@@ -75,7 +85,6 @@ class TestCamera(devices.CameraDevice):
         """Create buffers and store values needed to remove padding later."""
         self._purge_buffers()
         self._logger.info("Creating buffers.")
-        #time.sleep(0.5)
 
     def _fetch_data(self):
         if self._acquiring and self._triggered > 0:
@@ -86,15 +95,19 @@ class TestCamera(devices.CameraDevice):
             time.sleep(self._exposure_time)
             self._triggered -= 1
             # Create an image
-            size = (512,512)
+            dark = int(32 * np.random.rand())
+            light = int(255 - 128 * np.random.rand())
+            width = (self._roi[2] - self._roi[0]) // self._binning[0]
+            height = (self._roi[3] - self._roi[1]) // self._binning[1]
+            size = (width, height)
             image = Image.fromarray(
-                np.random.random_integers(255, size=size).astype(np.uint8), 'L')
+                np.random.randint(dark, light, size=size).astype(np.uint8), 'L')
             # Render text
             text = "%d" % self._sent
             tsize = self._font.getsize(text)
             ctx = ImageDraw.Draw(image)
-            ctx.rectangle([size[0]-tsize[0]-8, 0, size[0], tsize[1]+8], fill=0)
-            ctx.text((size[0]-tsize[0]-4, 4), text, fill=255)
+            ctx.rectangle([size[0]-tsize[0]-8, 0, size[0], tsize[1]+8], fill=dark)
+            ctx.text((size[0]-tsize[0]-4, 4), text, fill=light)
 
             self._sent += 1
             return np.asarray(image).T
@@ -168,7 +181,6 @@ class TestCamera(devices.CameraDevice):
         pass
 
 
-@Pyro4.expose
 class TestFilterWheel(FilterWheelBase):
     def __init__(self, filters=[], *args, **kwargs):
         super(TestFilterWheel, self).__init__(filters, *args, **kwargs)
@@ -188,7 +200,6 @@ class TestFilterWheel(FilterWheelBase):
         pass
 
 
-@Pyro4.expose
 class TestLaser(devices.LaserDevice):
     def __init__(self, *args, **kwargs):
         super(TestLaser, self).__init__()
@@ -230,7 +241,6 @@ class TestLaser(devices.LaserDevice):
         return [0, self._power][self._emission]
 
 
-@Pyro4.expose
 class TestDeformableMirror(devices.DeformableMirror):
     def __init__(self, n_actuators, *args, **kwargs):
         super(TestDeformableMirror, self).__init__(*args, **kwargs)
@@ -241,7 +251,6 @@ class TestDeformableMirror(devices.DeformableMirror):
         self._current_pattern = pattern
 
 
-@Pyro4.expose
 @Pyro4.behavior('single')
 class DummySLM(devices.Device):
     def __init__(self, *args, **kwargs):
@@ -285,7 +294,6 @@ class DummySLM(devices.Device):
         return self.sequence_index
 
 
-@Pyro4.expose
 @Pyro4.behavior('single')
 class DummyDSP(devices.Device):
     def __init__(self, *args, **kwargs):
