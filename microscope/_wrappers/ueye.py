@@ -55,16 +55,17 @@ HIDS = DWORD
 IDSEXP = INT
 IDSEXPUL = ULONG
 
-
 pINT = ctypes.POINTER(INT)
-
-SUCCESS = 0
 
 TRUE = 1
 FALSE = 0
 
-USE_DEVICE_ID = 0x8000
+## Error codes
+SUCCESS = 0
+INVALID_MODE = 101
 
+
+USE_DEVICE_ID = 0x8000
 
 ## Binning
 
@@ -127,6 +128,8 @@ CM_MONO16 = 28
 
 DEVICE_INFO_CMD_GET_DEVICE_INFO = 0x02010001
 
+## Camera info constants
+GET_STATUS = 0x8000
 STANDBY = 24
 STANDBY_SUPPORTED = 25
 
@@ -245,3 +248,7 @@ ExitCamera = prototype('is_ExitCamera', [HIDS])
 GetSensorInfo = prototype('is_GetSensorInfo', [HIDS, PSENSORINFO])
 
 CameraStatus = prototype('is_CameraStatus', [HIDS, INT, ULONG], IDSEXPUL)
+
+SetColorMode = prototype('is_SetColorMode', [HIDS, INT])
+
+SetExternalTrigger = prototype('is_SetExternalTrigger', [HIDS, INT])

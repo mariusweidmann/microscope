@@ -42,18 +42,12 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
     Things not working and we don't know how::
 
-    * our camera seems to not support going in standby.  There is
-      method to check if camera supports it.  There is no method to
-      query the camera standbt state though.
-
-    * if camera is enabled, temperature goes up very quickly, even if
-    in software trigger mode (not in freerun mode)
-
     * don't know how to query the supported colormode modes.
 
     * minimize pixel clock when setting exposure time
+
     """
-    def __init__(self, serial_number: str = None):
+    def __init__(self, serial_number: str = None) -> None:
         super().__init__()
         ## The following IDs exist: camera ID, device ID, and sensor ID.
         ##
@@ -82,8 +76,8 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
         if serial_number is None:
             ## If zero is used as device ID during initialisation, the
-            ## next available camera is picked.  Initialization will
-            ## set handler with the device ID of the camera.
+            ## next available camera is picked.  InitCamera will set
+            ## the handle to the device ID of the camera.
             self._handle = ueye.HIDS(0)
         else:
             camera_list = ueye.camera_list_type_factory(n_cameras.value)()
@@ -92,34 +86,25 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
                                            ueye.PUEYE_CAMERA_LIST))
             for camera in camera_list.uci:
                 if camera.SerNo == serial_number.encode():
-                    self._handler = ueye.HIDS(camera.dwDeviceID)
+                    self._handle = ueye.HIDS(camera.dwDeviceID)
                     break
             else:
                 raise RuntimeError("No camera found with serial number '%s'"
                                    % serial_number)
 
-        ## InitCamera will set the the handle back with the device ID
+        ## InitCamera sets the handle back to the device ID
         self._handle = ueye.HIDS(self._handle.value | ueye.USE_DEVICE_ID)
         status = ueye.InitCamera(ctypes.byref(self._handle), None)
         if status != ueye.SUCCESS:
             raise RuntimeError('failed to init camera, returned %d' % status)
+
+        ## By default, camera is enabled (not on standby) after init.
         self.enabled = True
-
+        self._on_disable()
+        self._on_enable()
+        self._set_our_default_state()
         ## XXX: we should be reading this from the camera
-        self._trigger_mode = microscope.devices.TriggerMode.ONCE
-        self._trigger_type = microscope.devices.TriggerType.SOFTWARE
 
-
-        # standby_supported = ueye.ulong()
-        # status = ueye.is_CameraStatus(self._handler, ueye.IS_STANDBY_SUPPORTED,
-        #                               standby_supported)
-        # if status != ueye.IS_SUCCESS:
-        #     raise RuntimeError()
-        # if not standby_supported.value:
-        #     raise RuntimeError('not supported')
-
-        self._device_info = ueye.DEVICE_INFO()
-        self._update_device_info()
         self._sensor_shape = self._read_sensor_shape() # type: Tuple[int, int]
         # self._exposure_time = self._read_exposure_time() # type: float
         # self._exposure_range = self._read_exposure_range() # type: Tuple[float, float]
@@ -129,14 +114,58 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
     def initialize(self, *args, **kwargs) -> None:
         pass # Already done in __init__
 
-    def _update_device_info(self) -> None:
-        """Update the internal ``_device_info`` property"""
-        status = ueye.DeviceInfo(self._handle.value | ueye.USE_DEVICE_ID,
-                                 ueye.DEVICE_INFO_CMD_GET_DEVICE_INFO,
-                                 ctypes.byref(self._device_info),
-                                 ctypes.sizeof(self._device_info))
+    def _on_shutdown(self) -> None:
+        status = ueye.ExitCamera(self._handle)
         if status != ueye.SUCCESS:
-            raise RuntimeError('failed to get device info')
+            raise RuntimeError('failed to shutdown camera, returned %d'
+                               % status)
+
+    def _on_enable(self) -> None:
+        if self._supports_standby():
+            status = ueye.CameraStatus(self._handle, ueye.STANDBY, ueye.FALSE)
+            if status != ueye.SUCCESS:
+                raise RuntimeError('failed to enter standby')
+            self.enabled = True
+            ## TODO: default is freerun mode, need to change all that
+        else:
+            raise RuntimeError('not supported')
+
+    def _on_disable(self) -> None:
+        if self._supports_standby():
+            status = ueye.CameraStatus(self._handle, ueye.STANDBY, ueye.TRUE)
+            if status != ueye.SUCCESS:
+                raise RuntimeError('failed to enter standby')
+            self.enabled = False
+        else:
+            raise RuntimeError('not supported')
+
+    def _supports_standby(self):
+        supported = ueye.CameraStatus(self._handle, ueye.STANDBY_SUPPORTED,
+                                      ueye.GET_STATUS)
+        return supported == ueye.TRUE
+
+    def _set_our_default_state(self):
+        ## This only works when camera is enabled, and will enabled the camera.
+        ## by default, this is not useful
+        # self._trigger_mode = microscope.devices.TriggerMode.ONCE
+        # self._trigger_type = microscope.devices.TriggerType.SOFTWARE
+#        status = ueye.is_SetExternalTrigger(h, ueye.IS_SET_TRIGGER_SOFTWARE)
+#        status = ueye.SetColorMode(self._handle, ueye.CM_MONO8)
+#        if status != ueye.SUCCESS:
+#            raise RuntimeError('failed to set color mode')
+        ## There's no way to find the supported colormodes, we just
+        ## need to try and see what works.
+        for mode in (ueye.CM_SENSOR_RAW16, ueye.CM_SENSOR_RAW12,
+                     ueye.CM_SENSOR_RAW10, ueye.CM_SENSOR_RAW8):
+            status = ueye.SetColorMode(self._handle, mode)
+            if status == ueye.SUCCESS:
+                break
+            elif status == ueye.INVALID_MODE:
+                continue # try next mode
+            else:
+                raise RuntimeError('failed to set color mode')
+        else:
+            raise RuntimeError('no colormode of interest is supported')
 
     def _read_sensor_shape(self) -> Tuple[int, int]:
         ## Only works when camera is enabled
@@ -149,7 +178,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
     def _read_exposure_time(self) -> float:
         ## Only works when camera is enabled
         time_msec = ctypes.c_double()
-        status = ueye.is_Exposure(self._handler, ueye.IS_EXPOSURE_CMD_GET_EXPOSURE,
+        status = ueye.is_Exposure(self._handle, ueye.IS_EXPOSURE_CMD_GET_EXPOSURE,
                                   time_msec, ctypes.sizeof(time_msec))
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to to read exposure time')
@@ -158,34 +187,13 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
     def _read_exposure_range(self) -> Tuple[float, float]:
         ## Only works when camera is enabled
         range_msec = (ctypes.c_double*3)() # min, max, inc
-        status = ueye.is_Exposure(self._handler,
+        status = ueye.is_Exposure(self._handle,
                                   ueye.IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE,
                                   range_msec, ctypes.sizeof(range_msec))
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to to read exposure time range')
         return (range_msec[0]/1000, range_msec[1]/1000)
 
-
-    def _on_enable(self) -> bool:
-        self._handle = ueye.HIDS(self._handle.value | ueye.USE_DEVICE_ID)
-        status = ueye.is_InitCamera(ctypes.byref(self._handle), None)
-        if status != ueye.SUCCESS:
-            raise RuntimeError('failed to init camera, returned %d' % status)
-        return True
-
-    def _on_disable(self) -> None:
-        return
-        ## this is odd.  If the camera does not support standby, this
-        ## still returns success.
-        status = ueye.CameraStatus(self._handle, ueye.STANDBY, ueye.TRUE)
-        if status != ueye.SUCCESS:
-            raise RuntimeError('failed to enter standby')
-
-    def _on_shutdown(self) -> None:
-        status = ueye.ExitCamera(self._handle)
-        if status != ueye.SUCCESS:
-            raise RuntimeError('failed to shutdown camera, returned %d'
-                               % status)
 
     ## TODO
     def abort(self):
@@ -213,7 +221,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ## should never happen.  Still...
         assert secs == 0.0, "exposure value should not be zero"
         msecs_cdouble = ctypes.c_double(secs * 1000)
-        status = ueye.is_Exposure(self._handler, ueye.IS_EXPOSURE_CMD_SET_EXPOSURE,
+        status = ueye.is_Exposure(self._handle, ueye.IS_EXPOSURE_CMD_SET_EXPOSURE,
                                   msecs_cdouble, ctypes.sizeof(msecs_cdouble))
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to set exposure time')
@@ -234,7 +242,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ## XXX: needs testing because our camera does not support binning
         ## FIXME: I think this only works with the camera enabled.  If
         ## camera is disabled, this returns an error.
-        binning = ueye.is_SetBinning(self._handler, ueye.IS_GET_BINNING)
+        binning = ueye.is_SetBinning(self._handle, ueye.IS_GET_BINNING)
         h_bin = binning & ueye.IS_BINNING_MASK_HORIZONTAL
         v_bin = binning & ueye.IS_BINNING_MASK_VERTICAL
         return (_BITS_TO_HORIZONTAL_BINNING[h_bin],
@@ -252,12 +260,12 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ## Even if the SDK has support for this binning mode, the
         ## camera itself may not support it.
         ## FIXME: this only works if camera is enabled
-        supported = ueye.is_SetBinning(self._handler,
+        supported = ueye.is_SetBinning(self._handle,
                                        ueye.IS_GET_SUPPORTED_BINNING)
         if binning != (supported & binning):
             raise ValueError('unsupported binning mode %dx%d' % (h_bin, v_bin))
 
-        status = ueye.is_SetBinning(self._handler, binning)
+        status = ueye.is_SetBinning(self._handle, binning)
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('Failed to set binning')
 
@@ -274,6 +282,14 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         Not all cameras will have a temperature sensor.  Documentation
         says only USB3 and GigE uEye cameras.
         """
+        device_info = ueye.DEVICE_INFO()
+        status = ueye.DeviceInfo(self._handle.value | ueye.USE_DEVICE_ID,
+                                 ueye.DEVICE_INFO_CMD_GET_DEVICE_INFO,
+                                 ctypes.byref(device_info),
+                                 ctypes.sizeof(device_info))
+        if status != ueye.SUCCESS:
+            raise RuntimeError('failed to get device info')
+
         ## Documentation for wTemperature (uint16_t)
         ##   Bit 15: algebraic sign
         ##   Bit 14...11: filled according to algebraic sign
@@ -281,8 +297,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ##   Bit 3...0: temperature (places after the decimal point)
         ##
         ## We have no clue what to do with bits 14...11.
-        self._update_device_info()
-        bits = self._device_info.infoDevHeartbeat.wTemperature
+        bits = device_info.infoDevHeartbeat.wTemperature
         sign = bits >> 15
         integer_part = bits >> 4 & 0b111111
         fractional_part = bits & 0b1111
@@ -313,23 +328,23 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         pid = ueye.c_int()
         ## INT is_AllocImageMem (HIDS hCam, INT width, INT height,
         ##                       INT bitspixel, char** ppcImgMem, INT* pid)
-        status = ueye.is_AllocImageMem(self._handler, im_size[0], im_size[1],
+        status = ueye.is_AllocImageMem(self._handle, im_size[0], im_size[1],
                                        bitspixel,
                                        buffer.ctypes.data_as(ctypes.c_char_p),
                                        pid)
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to alloc image')
         ## INT is_SetImageMem (HIDS hCam, char* pcImgMem, INT id)
-        status = ueye.is_SetImageMem(self._handler, buffer, pid)
+        status = ueye.is_SetImageMem(self._handle, buffer, pid)
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to set image mem')
-        status = ueye.is_FreezeVideo(self._handler, ueye.IS_WAIT) # blocking call
+        status = ueye.is_FreezeVideo(self._handle, ueye.IS_WAIT) # blocking call
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('failed to acquire image')
 
     def _get_bits_per_pixel(self):
         """Current number of bits per image pixel."""
-        colormode = ueye.is_SetColorMode(self._handler, ueye.IS_GET_COLOR_MODE)
+        colormode = ueye.is_SetColorMode(self._handle, ueye.IS_GET_COLOR_MODE)
         try:
             return _COLORMODE_TO_N_BITS[colormode]
         except KeyError:
@@ -406,8 +421,6 @@ _COLORMODE_TO_N_BITS = {
 
 # ## AllocImage
 # ueye.is_InitCamera(h, None)
-# ueye.is_SetExternalTrigger(h, ueye.IS_SET_TRIGGER_SOFTWARE)
-# ueye.is_SetColorMode(h, ueye.IS_CM_MONO8)
 
 # pBuf = ueye.c_mem_p()
 # print('pbuf is ', pBuf.value)
@@ -469,4 +482,4 @@ _COLORMODE_TO_N_BITS = {
 # status = ueye.is_SetImageMem(h, buffer.ctypes.data_as(ueye.c_mem_p), pid)
 # if status != ueye.IS_SUCCESS:
 #     raise RuntimeError('failed to set image mem')
-# ueye.is_FreezeVideo(self._handler, ueye.IS_WAIT)
+# ueye.is_FreezeVideo(self._handle, ueye.IS_WAIT)

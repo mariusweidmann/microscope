@@ -34,7 +34,7 @@ import enum
 import functools
 import io
 
-
+import statemachine
 import serial.serialutil
 
 
@@ -706,3 +706,23 @@ class OmicronDeepstarLaserMock(SerialMock):
                                       % command.decode('utf-8'))
 
         self.in_buffer.write(answer + self.eol)
+
+
+# class IDSCamera(statemachine.StateMachine):
+#     closed = statemachine.State('Closed', initial=True)
+
+
+#     start = closed.to(freerun)
+#     close = yellow.to(red)
+#     go = red.to(green)
+
+def get_ids_camera:
+    states = [
+        'closed', # not opened yet, or shutdown
+        ## Operation modes (when opened, not closed):
+        'freerun',
+        'trigger',
+        'standby',
+    ]
+    cam = IDSCamera()
+    mac = Machine(model=cam, states=states, initial='closed')
