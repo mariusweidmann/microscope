@@ -34,7 +34,6 @@ import enum
 import functools
 import io
 
-import statemachine
 import serial.serialutil
 
 
@@ -708,21 +707,42 @@ class OmicronDeepstarLaserMock(SerialMock):
         self.in_buffer.write(answer + self.eol)
 
 
-# class IDSCamera(statemachine.StateMachine):
-#     closed = statemachine.State('Closed', initial=True)
+class IDSCamera:
+    """Modelled after UI-3060CP-M-GL Rev.2"""
 
-
-#     start = closed.to(freerun)
-#     close = yellow.to(red)
-#     go = red.to(green)
-
-def get_ids_camera:
-    states = [
-        'closed', # not opened yet, or shutdown
+    class State(enum.Enum):
+        closed = 0 # not opened yet, or shutdown
         ## Operation modes (when opened, not closed):
-        'freerun',
-        'trigger',
-        'standby',
-    ]
-    cam = IDSCamera()
-    mac = Machine(model=cam, states=states, initial='closed')
+        freerun = 1
+        trigger = 2
+        standby = 3
+
+    def __init__(self) -> None:
+        self._state = self.State.closed
+        self._reset_settings()
+
+    def _reset_settings(self) -> None:
+        pass
+
+    @property
+    def state(self) -> IDS.State:
+        return self._state
+
+    def is_closed(self) -> bool:
+        return self.state == self.State.closed
+
+    def is_open(self) -> bool:
+        return not self.is_closed()
+
+    def to_freerun_mode(self) -> None:
+        self.state = self.State.freerun
+
+    def to_trigger_mode(self) -> None:
+        self.state = self.State.trigger
+
+    def to_standby_mode(self) -> None:
+        self.state = self.State.standby
+
+    def to_closed_mode(self) -> None:
+        self.state = self.State.closed
+        self._reset_settings()
