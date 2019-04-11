@@ -128,7 +128,74 @@ class TestSerialMock(unittest.TestCase):
     self.assertEqual(self.serial.readline(), b'qux\r\n')
 
 
-class LaserTests:
+class DeviceTests:
+  """Tests for any device"""
+
+  def test_on_and_off(self):
+    """Device can be turned on and off"""
+    self.device.initialize()
+    self.device.shutdown()
+
+  def test_enable_and_disable(self):
+    ## TODO: we need to define what happens when enable is called and
+    ## device has not been initialized.
+    self.device.initialize()
+    self.device.enable()
+    self.assertTrue(self.device.enabled)
+    ## We don't check if it is disabled after shutdown because some
+    ## devices can't be turned off.
+    self.device.disable()
+    self.device.shutdown()
+
+  def test_enable_enabled(self):
+    """Handles enabling of an already enabled device"""
+    self.device.initialize()
+    self.device.enable()
+    self.assertTrue(self.device.enabled)
+    self.device.enable()
+    self.assertTrue(self.device.enabled)
+
+  def test_disable_disabled(self):
+    """Handles disabling of an already disabled device.
+
+    Test disabling twice, both before and after enabling it for the
+    first time.
+    """
+    self.device.initialize()
+    self.device.disable()
+    self.device.disable()
+    self.device.enable()
+    self.assertTrue(self.device.enabled)
+    self.device.disable()
+    self.device.disable()
+
+  def test_make_safe_on_initialized(self):
+    """Can make safe an initialized device"""
+    self.device.initialize()
+    self.device.make_safe()
+
+  def test_make_safe_on_enabled(self):
+    """Can make safe an enabled device"""
+    self.device.initialize()
+    self.device.enable()
+    self.device.make_safe()
+
+  def test_make_safe_on_disabled(self):
+    """Can make safe a disabled device"""
+    self.device.initialize()
+    self.device.enable()
+    self.device.make_safe()
+
+  def test_make_safe_on_shutdown(self):
+    """Can make safe a shutdown device"""
+    self.device.initialize()
+    self.device.enable()
+    self.device.disable()
+    self.device.shutdown()
+    self.device.make_safe()
+
+
+class LaserTests(DeviceTests):
   """Base class for :class:`LaserDevice` tests.
 
   This class implements all the general laser tests and is meant to be
