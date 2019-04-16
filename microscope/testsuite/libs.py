@@ -446,93 +446,93 @@ class MockLibpvcam(MockSharedLib):
 
 
 class MockLibueye(MockSharedLib):
-  """Mocks uEye API SDK for microscope.cameras.ids."""
-  libs = ['libueye_api.so']
-  functions = [
-    'is_CameraStatus',
-    'is_DeviceInfo',
-    'is_ExitCamera',
-    'is_GetCameraList',
-    'is_GetNumberOfCameras',
-    'is_GetSensorInfo',
-    'is_InitCamera',
-    'is_SetColorMode',
-    'is_SetExternalTrigger',
-  ]
+    """Mocks uEye API SDK for microscope.cameras.ids."""
+    libs = ['libueye_api.so']
+    functions = [
+        'is_CameraStatus',
+        'is_DeviceInfo',
+        'is_ExitCamera',
+        'is_GetCameraList',
+        'is_GetNumberOfCameras',
+        'is_GetSensorInfo',
+        'is_InitCamera',
+        'is_SetColorMode',
+        'is_SetExternalTrigger',
+    ]
 
-  def __init__(self):
-    super().__init__()
-    self._id_to_devices = {} # type: Dict[int, IDSCamera]
+    def __init__(self):
+        super().__init__()
+        self._id_to_devices = {} # type: Dict[int, IDSCamera]
 
-    for fname in self.functions:
-      mock_function_ptr = getattr(self, fname)
-      mock_call = getattr(self, fname[3:], None)
-      if mock_call is not None:
-        mock_function_ptr._call = mock_call
+        for fname in self.functions:
+            mock_function_ptr = getattr(self, fname)
+            mock_call = getattr(self, fname[3:], None)
+            if mock_call is not None:
+                mock_function_ptr._call = mock_call
 
-  def plug_in_camera(camera):
-    next_id = 1+ max(self._id_to_devices.keys(), default=0)
-    self._id_to_devices[next_id] = camera
+    def plug_in_camera(camera):
+        next_id = 1+ max(self._id_to_devices.keys(), default=0)
+        self._id_to_devices[next_id] = camera
 
-  def get_next_available_camera(self):
-    for device_id in sorted(self._id_to_devices):
-      camera = self._id_to_devices[device_id]
-      if .is_closed():
-        return camera
-    ## returns None if there is no available camera
+    def get_next_available_camera(self):
+        for device_id in sorted(self._id_to_devices):
+            camera = self._id_to_devices[device_id]
+            if camera.is_closed():
+                return camera
+        ## returns None if there is no available camera
 
-  def get_id_from_camera(self, camera):
-    device_ids = [i for i, c in self._id_to_devices.items() if c is camera]
-    assert device_ids == 1, 'somehow we broke internal dict'
-    return device_ids[0]
+    def get_id_from_camera(self, camera):
+        device_ids = [i for i, c in self._id_to_devices.items() if c is camera]
+        assert device_ids == 1, 'somehow we broke internal dict'
+        return device_ids[0]
 
-  def InitCamera(self, phCam, hWnd):
-    if hWnd is not None:
-      raise NotImplementedError('we only run in DIB mode')
-    hCam = phCam._obj
-    if (~hCam.value) & 0x8000:
-      raise NotImplementedError('we only init by device id')
-    device_id = hCam.value & (~0x8000)
+    def InitCamera(self, phCam, hWnd):
+        if hWnd is not None:
+            raise NotImplementedError('we only run in DIB mode')
+        hCam = phCam._obj
+        if (~hCam.value) & 0x8000:
+            raise NotImplementedError('we only init by device id')
+        device_id = hCam.value & (~0x8000)
 
-    ## If any error happens, hCam gets set/remains zero.
-    hCam.value = 0
-    if device_id == 0:
-      camera = self.get_next_available_camera()
-      if camera is None:
-        return 3 # IS_CANT_OPEN_DEVICE
-    else:
-      try:
-        camera = self._id_to_devices[device_id]
-      except KeyError: # no such device
-        return 3 # IS_CANT_OPEN_DEVICE
-    if camera.is_open():
-      return 3 # IS_CANT_OPEN_DEVICE
+        ## If any error happens, hCam gets set/remains zero.
+        hCam.value = 0
+        if device_id == 0:
+            camera = self.get_next_available_camera()
+            if camera is None:
+                return 3 # IS_CANT_OPEN_DEVICE
+        else:
+            try:
+                camera = self._id_to_devices[device_id]
+            except KeyError: # no such device
+                return 3 # IS_CANT_OPEN_DEVICE
+        if camera.is_open():
+            return 3 # IS_CANT_OPEN_DEVICE
 
-    camera.set_freerun_mode()
-    hCam.value = self.get_id_from_camera[camera]
-    return 0 # IS_SUCCESS
+        camera.set_freerun_mode()
+        hCam.value = self.get_id_from_camera[camera]
+        return 0 # IS_SUCCESS
 
-  def CameraStatus(self):
-    pass
-  def DeviceInfo(self):
-    pass
+    def CameraStatus(self):
+        pass
+    def DeviceInfo(self):
+        pass
 
-  def ExitCamera(self, hCam):
-    try:
-      camera = self._id_to_devices[hCam.value]
-    except KeyError:
-      return 1 # IS_INVALID_CAMERA_HANDLE
-    if camera.is_closed():
-      return 1 # IS_INVALID_CAMERA_HANDLE
-    camera.to_closed_mode()
-    return 0 # IS_SUCCESS
+    def ExitCamera(self, hCam):
+        try:
+            camera = self._id_to_devices[hCam.value]
+        except KeyError:
+            return 1 # IS_INVALID_CAMERA_HANDLE
+        if camera.is_closed():
+            return 1 # IS_INVALID_CAMERA_HANDLE
+        camera.to_closed_mode()
+        return 0 # IS_SUCCESS
 
-  def GetCameraList(self):
-    pass
-  def GetNumberOfCameras(self):
-    pass
-  def GetSensorInfo(self):
-    pass
+    def GetCameraList(self):
+        pass
+    def GetNumberOfCameras(self):
+        pass
+    def GetSensorInfo(self):
+        pass
 
 
 ## Create a map of library names (as they would be named when

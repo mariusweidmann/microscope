@@ -18,6 +18,7 @@
 ## You should have received a copy of the GNU General Public License
 ## along with Microscope.  If not, see <http://www.gnu.org/licenses/>.
 
+import abc
 import unittest
 import unittest.mock
 
@@ -126,8 +127,20 @@ class TestSerialMock(unittest.TestCase):
         self.assertEqual(self.serial.readline(), b'qux\r\n')
 
 
-class DeviceTests:
-    """Tests for any device"""
+class DeviceTests(metaclass=abc.ABCMeta):
+    """Tests cases for all devices.
+
+    This collection of tests cover the very basic behaviour of the
+    concrete implementations, stuff like initializing and enabling the
+    device.  Device type specific ``TestCase`` should subclass from
+    it.
+
+    """
+
+    @property
+    @abc.abstractmethod
+    def device(self):
+        pass
 
     def test_on_and_off(self):
         """Device can be turned on and off"""

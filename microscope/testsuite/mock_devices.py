@@ -725,7 +725,7 @@ class IDSCamera:
         pass
 
     @property
-    def state(self) -> IDS.State:
+    def state(self): # -> IDSCamera.State (see PEP 563 for why it is commented)
         return self._state
 
     def is_closed(self) -> bool:
