@@ -708,9 +708,10 @@ class OmicronDeepstarLaserMock(SerialMock):
 
 
 class IDSCamera:
-    """Modelled after UI-3060CP-M-GL Rev.2"""
+    """Modelled after a UI-3060CP-M-GL Rev.2
+    """
 
-    class State(enum.Enum):
+    class OperationMode(enum.Enum):
         closed = 0 # not opened yet, or shutdown
         ## Operation modes (when opened, not closed):
         freerun = 1
@@ -718,31 +719,30 @@ class IDSCamera:
         standby = 3
 
     def __init__(self) -> None:
-        self._state = self.State.closed
+        self.operation_mode = self.OperationMode.closed # type: OperationMode
         self._reset_settings()
+
+    def supports_standby(self):
+        return True
 
     def _reset_settings(self) -> None:
         pass
 
-    @property
-    def state(self): # -> IDSCamera.State (see PEP 563 for why it is commented)
-        return self._state
-
     def is_closed(self) -> bool:
-        return self.state == self.State.closed
+        return self.operation_mode == self.OperationMode.closed
 
     def is_open(self) -> bool:
         return not self.is_closed()
 
     def to_freerun_mode(self) -> None:
-        self.state = self.State.freerun
+        self.operation_mode = self.OperationMode.freerun
 
     def to_trigger_mode(self) -> None:
-        self.state = self.State.trigger
+        self.operation_mode = self.OperationMode.trigger
 
     def to_standby_mode(self) -> None:
-        self.state = self.State.standby
+        self.operation_mode = self.OperationMode.standby
 
     def to_closed_mode(self) -> None:
-        self.state = self.State.closed
+        self.operation_mode = self.OperationMode.closed
         self._reset_settings()

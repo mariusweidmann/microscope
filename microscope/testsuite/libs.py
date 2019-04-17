@@ -444,6 +444,9 @@ class MockLibpvcam(MockSharedLib):
         'pl_set_param',
     ]
 
+## TODO: need a way to import this without the library
+from microscope._wrappers import ueye
+
 
 class MockLibueye(MockSharedLib):
     """Mocks uEye API SDK for microscope.cameras.ids."""
@@ -470,7 +473,7 @@ class MockLibueye(MockSharedLib):
             if mock_call is not None:
                 mock_function_ptr._call = mock_call
 
-    def plug_in_camera(camera):
+    def plug_in_camera(self, camera):
         next_id = 1+ max(self._id_to_devices.keys(), default=0)
         self._id_to_devices[next_id] = camera
 
@@ -483,18 +486,22 @@ class MockLibueye(MockSharedLib):
 
     def get_id_from_camera(self, camera):
         device_ids = [i for i, c in self._id_to_devices.items() if c is camera]
-        assert device_ids == 1, 'somehow we broke internal dict'
+        assert len(device_ids) == 1,'somehow we broke internal dict'
         return device_ids[0]
 
     def InitCamera(self, phCam, hWnd):
         if hWnd is not None:
             raise NotImplementedError('we only run in DIB mode')
         hCam = phCam._obj
-        if (~hCam.value) & 0x8000:
-            raise NotImplementedError('we only init by device id')
-        device_id = hCam.value & (~0x8000)
 
-        ## If any error happens, hCam gets set/remains zero.
+        if hCam.value == 0:
+            device_id = 0
+        elif not (hCam.value & 0x8000):
+            raise NotImplementedError("we don't init by camera id")
+        else:
+            device_id = hCam.value & (~0x8000)
+
+        ## If any error happens, hCam is set to / remains zero.
         hCam.value = 0
         if device_id == 0:
             camera = self.get_next_available_camera()
@@ -508,12 +515,36 @@ class MockLibueye(MockSharedLib):
         if camera.is_open():
             return 3 # IS_CANT_OPEN_DEVICE
 
-        camera.set_freerun_mode()
-        hCam.value = self.get_id_from_camera[camera]
+        camera.to_freerun_mode()
+        hCam.value = self.get_id_from_camera(camera)
         return 0 # IS_SUCCESS
 
-    def CameraStatus(self):
-        pass
+    def CameraStatus(self, hCam, nInfo, ulValue):
+        try:
+            device = self._id_to_devices[hCam.value]
+        except KeyError:
+            return 1 # IS_INVALID_CAMERA_HANDLE
+
+        if nInfo == ueye.STANDBY_SUPPORTED:
+            if ulValue == ueye.GET_STATUS:
+                if device.supports_standby():
+                    return ueye.TRUE
+                else:
+                    return ueye.FALSE
+            else:
+                raise RuntimeError('for query, ulValue must be GET_STATUS')
+
+        elif nInfo == ueye.STANDBY:
+            if ulValue == ueye.FALSE:
+                device.to_freerun_mode()
+            elif ulValue == ueye.TRUE:
+                device.to_standby_mode()
+            else:
+                raise NotImplementedError()
+        else:
+            raise NotImplementedError()
+        return ueye.SUCCESS
+
     def DeviceInfo(self):
         pass
 
