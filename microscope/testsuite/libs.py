@@ -56,6 +56,9 @@ import ctypes
 import inspect
 import sys
 
+from microscope._defs import ueye
+
+
 class MockFuncPtr(object):
     """A mock for a C function.
 
@@ -444,9 +447,6 @@ class MockLibpvcam(MockSharedLib):
         'pl_set_param',
     ]
 
-## TODO: need a way to import this without the library
-from microscope._wrappers import ueye
-
 
 class MockLibueye(MockSharedLib):
     """Mocks uEye API SDK for microscope.cameras.ids."""
@@ -480,7 +480,7 @@ class MockLibueye(MockSharedLib):
     def get_next_available_camera(self):
         for device_id in sorted(self._id_to_devices):
             camera = self._id_to_devices[device_id]
-            if camera.is_closed():
+            if camera.on_closed():
                 return camera
         ## returns None if there is no available camera
 
@@ -512,7 +512,7 @@ class MockLibueye(MockSharedLib):
                 camera = self._id_to_devices[device_id]
             except KeyError: # no such device
                 return 3 # IS_CANT_OPEN_DEVICE
-        if camera.is_open():
+        if camera.on_open():
             return 3 # IS_CANT_OPEN_DEVICE
 
         camera.to_freerun_mode()
@@ -553,7 +553,7 @@ class MockLibueye(MockSharedLib):
             camera = self._id_to_devices[hCam.value]
         except KeyError:
             return 1 # IS_INVALID_CAMERA_HANDLE
-        if camera.is_closed():
+        if camera.on_closed():
             return 1 # IS_INVALID_CAMERA_HANDLE
         camera.to_closed_mode()
         return 0 # IS_SUCCESS

@@ -722,17 +722,26 @@ class IDSCamera:
         self.operation_mode = self.OperationMode.closed # type: OperationMode
         self._reset_settings()
 
-    def supports_standby(self):
+    def supports_standby(self) -> bool:
         return True
 
     def _reset_settings(self) -> None:
         pass
 
-    def is_closed(self) -> bool:
+    def on_closed(self) -> bool:
         return self.operation_mode == self.OperationMode.closed
 
-    def is_open(self) -> bool:
-        return not self.is_closed()
+    def on_open(self) -> bool:
+        return not self.on_closed()
+
+    def on_freerun(self) -> bool:
+        return self.operation_mode == self.OperationMode.freerun
+
+    def on_trigger(self) -> bool:
+        return self.operation_mode == self.OperationMode.trigger
+
+    def on_standby(self) -> bool:
+        return self.operation_mode == self.OperationMode.standby
 
     def to_freerun_mode(self) -> None:
         self.operation_mode = self.OperationMode.freerun
