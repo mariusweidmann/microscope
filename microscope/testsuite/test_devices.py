@@ -222,6 +222,16 @@ class DeviceTests:
         self.device.make_safe()
 
 
+class SerialDeviceTests:
+    def test_connection_defaults(self):
+        self.assertEqual(self.device.connection.baudrate, self.fake.baudrate)
+        self.assertEqual(self.device.connection.parity, self.fake.parity)
+        self.assertEqual(self.device.connection.bytesize, self.fake.bytesize)
+        self.assertEqual(self.device.connection.stopbits, self.fake.stopbits)
+        self.assertEqual(self.device.connection.rtscts, self.fake.rtscts)
+        self.assertEqual(self.device.connection.dsrdtr, self.fake.dsrdtr)
+
+
 class LaserTests(DeviceTests):
     """Base class for :class:`LaserDevice` tests.
 
@@ -244,14 +254,6 @@ class LaserTests(DeviceTests):
         ## We could be smarter, but rounding the values should be
         ## enough to check the values when comparing power levels.
         self.assertEqual(round(first), round(second), msg)
-
-    def test_connection_defaults(self):
-        self.assertEqual(self.device.connection.baudrate, self.fake.baudrate)
-        self.assertEqual(self.device.connection.parity, self.fake.parity)
-        self.assertEqual(self.device.connection.bytesize, self.fake.bytesize)
-        self.assertEqual(self.device.connection.stopbits, self.fake.stopbits)
-        self.assertEqual(self.device.connection.rtscts, self.fake.rtscts)
-        self.assertEqual(self.device.connection.dsrdtr, self.fake.dsrdtr)
 
     def test_being(self):
         self.assertTrue(self.device.is_alive())
@@ -328,7 +330,52 @@ class LaserTests(DeviceTests):
             self.assertIsInstance(msg, str)
 
 
-class TestCoherentSapphireLaser(unittest.TestCase, LaserTests):
+class CameraTests(DeviceTests):
+    pass
+
+
+class FilterWheelTests(DeviceTests):
+    pass
+
+
+class DeformableMirrorTests(DeviceTests):
+    pass
+
+
+class SLMTests(DeviceTests):
+    pass
+
+
+class DSPTests(DeviceTests):
+    pass
+
+
+class TestDummyLaser(unittest.TestCase, LaserTests):
+    def setUp(self):
+        self.device = dummies.TestLaser()
+
+        ## TODO: we need to rethink the test so this is not needed.
+        self.fake = self.device
+        self.fake.default_power = self.fake._set_point
+        self.fake.min_power = 0.0
+        self.fake.max_power = 100.0
+
+    def test_being(self):
+        ## TODO: this test uses is_alive but that's actually a method
+        ## of SerialDeviceMixIn and not specific to lasers.  It is not
+        ## implemented on our dummy laser.  We need to decide what to
+        ## do about it.  Is this general enough that should go to all
+        ## devices?
+        pass
+
+    def test_get_is_on(self):
+        ## TODO: this test assumes the connection property to be the
+        ## fake.  We need to rethink how the mock lasers work.
+        pass
+
+
+class TestCoherentSapphireLaser(unittest.TestCase, LaserTests,
+                                SerialDeviceTests):
     def setUp(self):
         from microscope.lasers.sapphire import SapphireLaser
         from microscope.testsuite.mock_devices import CoherentSapphireLaserMock
@@ -339,7 +386,8 @@ class TestCoherentSapphireLaser(unittest.TestCase, LaserTests):
 
         self.fake = CoherentSapphireLaserMock
 
-class TestCoboltLaser(unittest.TestCase, LaserTests):
+
+class TestCoboltLaser(unittest.TestCase, LaserTests, SerialDeviceTests):
     def setUp(self):
         from microscope.lasers.cobolt import CoboltLaser
         from microscope.testsuite.mock_devices import CoboltLaserMock
@@ -350,7 +398,9 @@ class TestCoboltLaser(unittest.TestCase, LaserTests):
 
         self.fake = CoboltLaserMock
 
-class TestOmicronDeepstarLaser(unittest.TestCase, LaserTests):
+
+class TestOmicronDeepstarLaser(unittest.TestCase, LaserTests,
+                               SerialDeviceTests):
     def setUp(self):
         from microscope.lasers.deepstar import DeepstarLaser
         from microscope.testsuite.mock_devices import OmicronDeepstarLaserMock
@@ -378,6 +428,42 @@ class TestOmicronDeepstarLaser(unittest.TestCase, LaserTests):
         self.assertFalse(self.device.connection.bias_modulation)
         self.assertFalse(self.device.connection.digital_modulation)
         self.assertFalse(self.device.connection.analog2digital)
+
+
+class TestDummyCamera(unittest.TestCase, CameraTests):
+    def setUp(self):
+        self.device = dummies.TestCamera()
+
+
+class TestEmptyDummyFilterWheel(unittest.TestCase, FilterWheelTests):
+    def setUp(self):
+        self.device = dummies.TestFilterWheel()
+
+
+class TestOneFilterDummyFilterWheel(unittest.TestCase, FilterWheelTests):
+    def setUp(self):
+        self.device = dummies.TestFilterWheel([(0, 'DAPI', '430')])
+
+
+class TestMultiFilterDummyFilterWheel(unittest.TestCase, FilterWheelTests):
+    def setUp(self):
+        self.device = dummies.TestFilterWheel([(0, 'DAPI', '430'),
+                                               (1, 'GFP', '580'),])
+
+
+class TestDummyDeformableMirror(unittest.TestCase, DeformableMirrorTests):
+    def setUp(self):
+        self.device = dummies.TestDeformableMirror(86)
+
+
+class TestDummySLM(unittest.TestCase, SLMTests):
+    def setUp(self):
+        self.device = dummies.DummySLM()
+
+
+class TestDummyDSP(unittest.TestCase, DSPTests):
+    def setUp(self):
+        self.device = dummies.DummyDSP()
 
 
 if __name__ == '__main__':
