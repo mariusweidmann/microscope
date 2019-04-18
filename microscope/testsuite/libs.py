@@ -465,7 +465,7 @@ class MockLibueye(MockSharedLib):
 
     def __init__(self):
         super().__init__()
-        self._id_to_devices = {} # type: Dict[int, IDSCamera]
+        self._id_to_camera = {} # type: Dict[int, IDSCamera]
 
         for fname in self.functions:
             mock_function_ptr = getattr(self, fname)
@@ -473,19 +473,22 @@ class MockLibueye(MockSharedLib):
             if mock_call is not None:
                 mock_function_ptr._call = mock_call
 
-    def plug_in_camera(self, camera):
-        next_id = 1+ max(self._id_to_devices.keys(), default=0)
-        self._id_to_devices[next_id] = camera
+    def plug_camera(self, camera) -> None:
+        next_id = 1+ max(self._id_to_camera.keys(), default=0)
+        self._id_to_camera[next_id] = camera
+
+    def unplug_camera(self, camera) -> None:
+        self._id_to_camera.pop(self.get_id_from_camera(camera))
 
     def get_next_available_camera(self):
-        for device_id in sorted(self._id_to_devices):
-            camera = self._id_to_devices[device_id]
+        for device_id in sorted(self._id_to_camera):
+            camera = self._id_to_camera[device_id]
             if camera.on_closed():
                 return camera
         ## returns None if there is no available camera
 
     def get_id_from_camera(self, camera):
-        device_ids = [i for i, c in self._id_to_devices.items() if c is camera]
+        device_ids = [i for i, c in self._id_to_camera.items() if c is camera]
         assert len(device_ids) == 1,'somehow we broke internal dict'
         return device_ids[0]
 
@@ -509,7 +512,7 @@ class MockLibueye(MockSharedLib):
                 return 3 # IS_CANT_OPEN_DEVICE
         else:
             try:
-                camera = self._id_to_devices[device_id]
+                camera = self._id_to_camera[device_id]
             except KeyError: # no such device
                 return 3 # IS_CANT_OPEN_DEVICE
         if camera.on_open():
@@ -521,13 +524,13 @@ class MockLibueye(MockSharedLib):
 
     def CameraStatus(self, hCam, nInfo, ulValue):
         try:
-            device = self._id_to_devices[hCam.value]
+            camera = self._id_to_camera[hCam.value]
         except KeyError:
             return 1 # IS_INVALID_CAMERA_HANDLE
 
         if nInfo == ueye.STANDBY_SUPPORTED:
             if ulValue == ueye.GET_STATUS:
-                if device.supports_standby():
+                if camera.supports_standby():
                     return ueye.TRUE
                 else:
                     return ueye.FALSE
@@ -536,9 +539,9 @@ class MockLibueye(MockSharedLib):
 
         elif nInfo == ueye.STANDBY:
             if ulValue == ueye.FALSE:
-                device.to_freerun_mode()
+                camera.to_freerun_mode()
             elif ulValue == ueye.TRUE:
-                device.to_standby_mode()
+                camera.to_standby_mode()
             else:
                 raise NotImplementedError()
         else:
@@ -550,7 +553,7 @@ class MockLibueye(MockSharedLib):
 
     def ExitCamera(self, hCam):
         try:
-            camera = self._id_to_devices[hCam.value]
+            camera = self._id_to_camera[hCam.value]
         except KeyError:
             return 1 # IS_INVALID_CAMERA_HANDLE
         if camera.on_closed():
@@ -558,13 +561,62 @@ class MockLibueye(MockSharedLib):
         camera.to_closed_mode()
         return 0 # IS_SUCCESS
 
-    def GetCameraList(self):
-        pass
-    def GetNumberOfCameras(self):
-        pass
-    def GetSensorInfo(self):
-        pass
+    def GetCameraList(self, pucl):
+        n_cameras = len(self._id_to_camera)
 
+        ## If dwCount is zero, then it's a request to only get the
+        ## number of devices and not to fill the rest of the device
+        ## info.
+        if pucl.contents.dwCount == 0:
+            pucl.contents.dwCount = n_cameras
+            return 0
+
+        ## The SDK makes use of a nasty struct array hack.  Fail if we
+        ## forget to do the proper casting.  If the casting was done
+        ## right, then uci will always have a length of one.
+        if len(pucl.contents.uci) != 1:
+            raise RuntimeError('pucl need to be cast to PUEYE_CAMERA_LIST')
+
+        ## The SDK can handle this case.  However, if we ever got to
+        ## that state, we are already doing something wrong.
+        if pucl.contents.dwCount != n_cameras:
+            raise NotImplementedError('incorrect number of devices')
+
+        uci_correct_type = ueye.UEYE_CAMERA_INFO * n_cameras
+        full_uci = ctypes.cast(ctypes.byref(pucl.contents.uci),
+                               ctypes.POINTER(uci_correct_type))
+        for camera, uci in zip(self._id_to_camera.values(), full_uci.contents):
+            uci.dwCameraID = camera.camera_id
+            uci.dwDeviceID = self.get_id_from_camera(camera)
+            uci.dwSensorID = camera.sensor_id
+            uci.dwInUse = 1 if camera.on_open() else 0
+            uci.SerNo = camera.serial_number.encode()
+            uci.Model = camera.model.encode()
+            uci.FullModelName = camera.full_model_name.encode()
+        return 0
+
+
+    def GetNumberOfCameras(self, pnNumCams):
+        pnNumCams._obj.value = len(self._id_to_camera)
+        return 0
+
+
+    def GetSensorInfo(self, hCam, pInfo):
+        try:
+            camera = self._id_to_camera[hCam.value]
+        except KeyError:
+            return 1
+
+        if camera.on_closed():
+            return 1
+
+        pInfo._obj.SensorID = camera.sensor_id
+        pInfo._obj.strSensorName = camera.sensor_name.encode()
+#        pInfo._obj.nColorMode = camera. # TODO: colormode
+        pInfo._obj.nMaxWidth = camera.width
+        pInfo._obj.nMaxHeight = camera.height
+        pInfo._obj.wPixelSize = int(camera.pixel_size * 100)
+        return 0
 
 ## Create a map of library names (as they would be named when
 ## constructing CDLL in any supported OS), to the mock shared library.

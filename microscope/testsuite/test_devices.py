@@ -435,6 +435,19 @@ class TestDummyCamera(unittest.TestCase, CameraTests):
         self.device = dummies.TestCamera()
 
 
+class TestIDSCamera(unittest.TestCase, CameraTests):
+    def setUp(self):
+        ## FIXME: very ugly, much hack
+        import microscope.testsuite.libs
+        import ctypes
+        ctypes.CDLL = microscope.testsuite.libs.CDLL
+        import microscope.cameras.ids
+
+        self.fake = mocks.IDSCamera()
+        microscope.cameras.ids.ueye.SDK.plug_camera(self.fake)
+
+        self.device = microscope.cameras.ids.IDSuEye()
+
 class TestEmptyDummyFilterWheel(unittest.TestCase, FilterWheelTests):
     def setUp(self):
         self.device = dummies.TestFilterWheel()

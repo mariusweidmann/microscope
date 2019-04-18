@@ -720,6 +720,20 @@ class IDSCamera:
 
     def __init__(self) -> None:
         self.operation_mode = self.OperationMode.closed # type: OperationMode
+
+        ## For CAMERA_INFO struct
+        self.model = 'UI306xCP-M'
+        self.full_model_name = 'UI306xCP-M'
+        self.serial_number = '4103350857'
+        self.camera_id = 1
+        self.sensor_id = 538 # also for SENSORINFO
+
+        ## For SENSORINFO struct
+        self.sensor_name = 'UI306xCP-M'
+        self.width = 1936
+        self.height = 1216
+        self.pixel_size = 5.86 # µm
+
         self._reset_settings()
 
     def supports_standby(self) -> bool:
@@ -732,6 +746,7 @@ class IDSCamera:
         return self.operation_mode == self.OperationMode.closed
 
     def on_open(self) -> bool:
+        """Not really an operation mode, just a mode other than closed"""
         return not self.on_closed()
 
     def on_freerun(self) -> bool:

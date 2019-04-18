@@ -102,7 +102,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         self.enabled = True
         self._on_disable()
         self._on_enable()
-        self._set_our_default_state()
+#        self._set_our_default_state()
         ## XXX: we should be reading this from the camera
 
         self._sensor_shape = self._read_sensor_shape() # type: Tuple[int, int]
@@ -119,6 +119,12 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         if status != ueye.SUCCESS:
             raise RuntimeError('failed to shutdown camera, returned %d'
                                % status)
+
+    def enable(self) -> None:
+        ## FIXME: parent only sets to retunr of _on_enable, but should
+        ## probably do it unless there's an error?
+        super().enable()
+        self.enabled = True
 
     def _on_enable(self) -> None:
         if self._supports_standby():
@@ -155,6 +161,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 #            raise RuntimeError('failed to set color mode')
         ## There's no way to find the supported colormodes, we just
         ## need to try and see what works.
+        return
         for mode in (ueye.CM_SENSOR_RAW16, ueye.CM_SENSOR_RAW12,
                      ueye.CM_SENSOR_RAW10, ueye.CM_SENSOR_RAW8):
             status = ueye.SetColorMode(self._handle, mode)
@@ -170,7 +177,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
     def _read_sensor_shape(self) -> Tuple[int, int]:
         ## Only works when camera is enabled
         sensor_info = ueye.SENSORINFO()
-        status = ueye.GetSensorInfo(self._handle, sensor_info)
+        status = ueye.GetSensorInfo(self._handle, ctypes.byref(sensor_info))
         if status != ueye.SUCCESS:
             raise RuntimeError('failed to to read the sensor information')
         return (sensor_info.nMaxWidth, sensor_info.nMaxHeight)

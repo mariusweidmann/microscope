@@ -27,6 +27,7 @@ import microscope.testsuite.mock_devices
 
 from microscope._defs import ueye
 
+
 class TestLibueyeWithoutCamera(unittest.TestCase):
     """Test behavior when there is no camera connected."""
     def setUp(self):
@@ -50,6 +51,12 @@ class TestLibueyeWithoutCamera(unittest.TestCase):
         self.assertEqual(self.lib.ExitCamera(h0), 1)
         self.assertEqual(self.lib.ExitCamera(h1), 1)
 
+    def test_get_number_of_cameras(self):
+        n_cameras = ctypes.c_int(1)
+        status = self.lib.GetNumberOfCameras(ctypes.byref(n_cameras))
+        self.assertEqual(status, 0)
+        self.assertEqual(n_cameras.value, 0)
+
 
 class TestLibueyeBeforeInit(unittest.TestCase):
     """Tests for before `InitCamera`
@@ -61,7 +68,7 @@ class TestLibueyeBeforeInit(unittest.TestCase):
     def setUp(self):
         self.camera = microscope.testsuite.mock_devices.IDSCamera()
         self.lib = microscope.testsuite.libs.MockLibueye()
-        self.lib.plug_in_camera(self.camera)
+        self.lib.plug_camera(self.camera)
 
     def assertInitWithSuccess(self, h):
         status = self.lib.InitCamera(ctypes.byref(h), None)
@@ -97,6 +104,12 @@ class TestLibueyeBeforeInit(unittest.TestCase):
         self.assertEqual(h.value, 1)
         self.assertTrue(self.camera.on_closed())
 
+    def test_get_number_of_cameras(self):
+        n_cameras = ctypes.c_int(0)
+        status = self.lib.GetNumberOfCameras(ctypes.byref(n_cameras))
+        self.assertEqual(status, 0)
+        self.assertEqual(n_cameras.value, 1)
+
 
 class TestLibueye(unittest.TestCase):
     """There is only one camera plugged in, so its device ID is 1.
@@ -104,7 +117,7 @@ class TestLibueye(unittest.TestCase):
     def setUp(self):
         self.camera = microscope.testsuite.mock_devices.IDSCamera()
         self.lib = microscope.testsuite.libs.MockLibueye()
-        self.lib.plug_in_camera(self.camera)
+        self.lib.plug_camera(self.camera)
         self.h = ueye.HIDS(1 | ueye.USE_DEVICE_ID)
         status = self.lib.InitCamera(ctypes.byref(self.h), None)
         if status != 0:
@@ -175,6 +188,64 @@ class TestLibueye(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'GET_STATUS'):
             self.lib.CameraStatus(self.h, ueye.STANDBY_SUPPORTED, ueye.TRUE)
 
+    def test_get_number_of_cameras(self):
+        n_cameras = ctypes.c_int(0)
+        status = self.lib.GetNumberOfCameras(ctypes.byref(n_cameras))
+        self.assertEqual(status, 0)
+        self.assertEqual(n_cameras.value, 1)
+
+    def test_empty_camera_list(self):
+        camera_list = ueye.UEYE_CAMERA_LIST()
+        status = self.lib.GetCameraList(ctypes.pointer(camera_list))
+        self.assertEqual(status, 0)
+        self.assertEqual(camera_list.dwCount, 1)
+        ## Because dwCount was set to zero, the camera info was not
+        ## filled in.
+        self.assertEqual(camera_list.uci[0].dwDeviceID, 0)
+        self.assertEqual(camera_list.uci[0].SerNo, b'')
+
+    def test_camera_list_of_incorrect_length(self):
+        camera_list = ueye.camera_list_type_factory(4)()
+        camera_list.dwCount = 4
+        with self.assertRaisesRegex(NotImplementedError, 'number of devices'):
+            self.lib.GetCameraList(ctypes.cast(ctypes.byref(camera_list),
+                                               ueye.PUEYE_CAMERA_LIST))
+
+    def test_get_camera_list(self):
+        camera_list = ueye.UEYE_CAMERA_LIST()
+        camera_list.dwCount = 1
+        status = self.lib.GetCameraList(ctypes.pointer(camera_list))
+        self.assertEqual(status, 0)
+        self.assertEqual(camera_list.dwCount, 1)
+        self.assertEqual(camera_list.uci[0].dwDeviceID, 1)
+        self.assertEqual(camera_list.uci[0].dwInUse, 1)
+        self.assertEqual(camera_list.uci[0].SerNo, b'4103350857')
+
+    def test_get_standby_camera_list(self):
+        """Standby cameras count as cameras in use"""
+        self.camera.to_standby_mode()
+        camera_list = ueye.UEYE_CAMERA_LIST()
+        camera_list.dwCount = 1
+        self.lib.GetCameraList(ctypes.pointer(camera_list))
+        self.assertEqual(camera_list.uci[0].dwInUse, 1)
+
+    def test_get_closed_camera_list(self):
+        """Closed cameras are not in use"""
+        self.camera.to_closed_mode()
+        camera_list = ueye.UEYE_CAMERA_LIST()
+        camera_list.dwCount = 1
+        self.lib.GetCameraList(ctypes.pointer(camera_list))
+        self.assertEqual(camera_list.uci[0].dwInUse, 0)
+
+    def test_get_sensor_info(self):
+        sensor_info = ueye.SENSORINFO()
+        status = self.lib.GetSensorInfo(self.h, ctypes.byref(sensor_info))
+        self.assertEqual(status, 0)
+        for attr, val in [('nMaxWidth', 1936), ('nMaxHeight', 1216),]:
+            self.assertEqual(getattr(sensor_info, attr), val)
+
+## TODO: need to add tests for GetCameraList with more than one camera
+## so we can test for the struct hack there.
 
 if __name__ == '__main__':
     unittest.main()
