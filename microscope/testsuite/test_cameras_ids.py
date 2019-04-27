@@ -123,15 +123,17 @@ class MockSystem:
     .. todo::
 
        Confirm that device IDs are given by increasing order.  Restart
-       system.  Plug device A and check it's device ID.  We expect it
-       to be 1.  Plug device B and check it's device ID.  We expect it
+       system.  Plug device A and check its device ID.  We expect it
+       to be 1.  Plug device B and check its device ID.  We expect it
        to be 2.
 
-    .. todo:: Confirm that device IDs are consistent while system is
-       alive.  Restart system.  Plug device A and check it's device ID
-       is 1.  Unplug device A.  Plug device B and check it's device ID
-       is 2 (or at least not 1).  Plug device A again and check it's
-       device ID is the same as before.
+    .. todo::
+
+       Check what happens when devices are plugged in and out.  Plug
+        device A and check its device ID is 1.  Unplug device A.
+        Plug device B and check it's device ID is 2 (or at least not
+        1).  Plug device A again and check whether its device ID is
+        the same as before.
 
     """
     def __init__(self) -> None:
@@ -174,13 +176,13 @@ class MockSystem:
 
 
 class MockLibueye(microscope.testsuite.mock.MockLib):
-    """Mocks uEye API SDK for microscope.cameras.ids."""
+    """Mocks IDS uEye API SDK, based on version 4.90."""
     def __init__(self, system: MockSystem) -> None:
         super().__init__()
         self._system = system
 
     def is_InitCamera(self, phCam, hWnd):
-        if hWnd is not None:
+        if hWnd.value is not None:
             raise NotImplementedError('we only run in DIB mode')
         hCam = phCam.contents
 
@@ -211,12 +213,12 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
     def is_CameraStatus(self, hCam, nInfo, ulValue):
         try:
-            camera = self._system.get_camera(hCam)
+            camera = self._system.get_camera(hCam.value)
         except KeyError:
             return 1 # IS_INVALID_CAMERA_HANDLE
 
-        if nInfo == ueye.STANDBY_SUPPORTED:
-            if ulValue == ueye.GET_STATUS:
+        if nInfo.value == ueye.STANDBY_SUPPORTED:
+            if ulValue.value == ueye.GET_STATUS:
                 if camera.supports_standby():
                     return ueye.TRUE
                 else:
@@ -227,10 +229,10 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
             else:
                 raise RuntimeError('for query, ulValue must be GET_STATUS')
 
-        elif nInfo == ueye.STANDBY:
-            if ulValue == ueye.FALSE:
+        elif nInfo.value == ueye.STANDBY:
+            if ulValue.value == ueye.FALSE:
                 camera.to_freerun_mode()
-            elif ulValue == ueye.TRUE:
+            elif ulValue.value == ueye.TRUE:
                 camera.to_standby_mode()
             else:
                 raise NotImplementedError()
@@ -243,7 +245,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
     def is_ExitCamera(self, hCam):
         try:
-            camera = self._system.get_camera(hCam)
+            camera = self._system.get_camera(hCam.value)
         except KeyError:
             return 1 # IS_INVALID_CAMERA_HANDLE
         if camera.on_closed():
@@ -294,7 +296,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
     def is_GetSensorInfo(self, hCam, pInfo):
         try:
-            camera = self._system.get_camera(hCam)
+            camera = self._system.get_camera(hCam.value)
         except KeyError:
             return 1
 
@@ -320,29 +322,33 @@ class TestLibueyeWithoutCamera(unittest.TestCase):
     """Test behavior when there is no camera connected."""
     def setUp(self):
         self.system = MockSystem()
-        self.lib = MockLibueye(self.system)
+
+        lib  = MockLibueye(self.system)
+        libnames = ['libueye_api.so', 'ueye_api', 'ueye_api_64']
+        with microscope.testsuite.mock.mocked_c_dll(lib, libnames):
+            self.lib = importlib.reload(ueye)
 
     def test_init_next_without_devices(self):
         h = ueye.HIDS(0 | ueye.USE_DEVICE_ID)
-        status = self.lib.is_InitCamera(ctypes.pointer(h), None)
+        status = self.lib.InitCamera(ctypes.byref(h), None)
         self.assertEqual(status, 3)
         self.assertEqual(h.value, 0)
 
     def test_init_specific_without_devices(self):
         h = ueye.HIDS(1 | ueye.USE_DEVICE_ID)
-        status = self.lib.is_InitCamera(ctypes.pointer(h), None)
+        status = self.lib.InitCamera(ctypes.byref(h), None)
         self.assertEqual(status, 3)
         self.assertEqual(h.value, 0)
 
     def test_exit(self):
         h0 = ueye.HIDS(0)
         h1 = ueye.HIDS(1)
-        self.assertEqual(self.lib.is_ExitCamera(h0.value), 1)
-        self.assertEqual(self.lib.is_ExitCamera(h1.value), 1)
+        self.assertEqual(self.lib.ExitCamera(h0), 1)
+        self.assertEqual(self.lib.ExitCamera(h1), 1)
 
     def test_get_number_of_cameras(self):
         n_cameras = ctypes.c_int(1)
-        status = self.lib.is_GetNumberOfCameras(ctypes.pointer(n_cameras))
+        status = self.lib.GetNumberOfCameras(ctypes.byref(n_cameras))
         self.assertEqual(status, 0)
         self.assertEqual(n_cameras.value, 0)
 
@@ -356,12 +362,15 @@ class TestLibueyeBeforeInit(unittest.TestCase):
     """
     def setUp(self):
         self.system = MockSystem()
-        self.lib = MockLibueye(self.system)
+        lib  = MockLibueye(self.system)
+        libnames = ['libueye_api.so', 'ueye_api', 'ueye_api_64']
+        with microscope.testsuite.mock.mocked_c_dll(lib, libnames):
+            self.lib = importlib.reload(ueye)
         self.camera = UI306xCP_M()
         self.system.plug_camera(self.camera)
 
     def assertInitWithSuccess(self, h):
-        status = self.lib.is_InitCamera(ctypes.pointer(h), None)
+        status = self.lib.InitCamera(ctypes.byref(h), None)
         self.assertEqual(status, 0)
         self.assertEqual(h.value, 1)
         self.assertTrue(self.camera.on_freerun())
@@ -372,7 +381,7 @@ class TestLibueyeBeforeInit(unittest.TestCase):
     def test_init_by_camera_id(self):
         h = ueye.HIDS(1)
         with self.assertRaisesRegex(NotImplementedError, 'camera id'):
-            self.lib.is_InitCamera(ctypes.pointer(h), None)
+            self.lib.InitCamera(ctypes.byref(h), None)
 
     def test_init_next(self):
         h = ueye.HIDS(0)
@@ -390,13 +399,13 @@ class TestLibueyeBeforeInit(unittest.TestCase):
     def test_exit_before_init(self):
         """Exit before Init fails"""
         h = ueye.HIDS(1)
-        self.assertEqual(self.lib.is_ExitCamera(h.value), 1)
+        self.assertEqual(self.lib.ExitCamera(h), 1)
         self.assertEqual(h.value, 1)
         self.assertTrue(self.camera.on_closed())
 
     def test_get_number_of_cameras(self):
         n_cameras = ctypes.c_int(0)
-        status = self.lib.is_GetNumberOfCameras(ctypes.pointer(n_cameras))
+        status = self.lib.GetNumberOfCameras(ctypes.byref(n_cameras))
         self.assertEqual(status, 0)
         self.assertEqual(n_cameras.value, 1)
 
@@ -406,12 +415,15 @@ class TestLibueye(unittest.TestCase):
     """
     def setUp(self):
         self.system = MockSystem()
-        self.lib = MockLibueye(self.system)
+        lib  = MockLibueye(self.system)
+        libnames = ['libueye_api.so', 'ueye_api', 'ueye_api_64']
+        with microscope.testsuite.mock.mocked_c_dll(lib, libnames):
+            self.lib = importlib.reload(ueye)
         self.camera = UI306xCP_M()
         self.system.plug_camera(self.camera)
 
         self.h = ueye.HIDS(1 | ueye.USE_DEVICE_ID)
-        status = self.lib.is_InitCamera(ctypes.pointer(self.h), None)
+        status = self.lib.InitCamera(ctypes.byref(self.h), None)
         if status != 0:
             raise RuntimeError('error in InitCamera during setUp')
 
@@ -422,7 +434,7 @@ class TestLibueye(unittest.TestCase):
     def test_init_twice(self):
         """Init a camera twice fails and invalidates the handle"""
         self.h = ueye.HIDS(self.h.value | ueye.USE_DEVICE_ID)
-        status = self.lib.is_InitCamera(ctypes.pointer(self.h), None)
+        status = self.lib.InitCamera(ctypes.byref(self.h), None)
         self.assertEqual(status, 3)
         self.assertEqual(self.h.value, 0)
 
@@ -432,44 +444,42 @@ class TestLibueye(unittest.TestCase):
 
     def test_exit(self):
         """Exit an Init camera works"""
-        self.assertEqual(self.lib.is_ExitCamera(self.h.value), 0)
+        self.assertEqual(self.lib.ExitCamera(self.h), 0)
         self.assertTrue(self.camera.on_closed())
 
     def test_exit_twice(self):
         """Exit a closed camera fails"""
-        self.assertEqual(self.lib.is_ExitCamera(self.h.value), 0)
-        self.assertEqual(self.lib.is_ExitCamera(self.h.value), 1)
+        self.assertEqual(self.lib.ExitCamera(self.h), 0)
+        self.assertEqual(self.lib.ExitCamera(self.h), 1)
         self.assertTrue(self.camera.on_closed())
 
     def test_to_standby(self):
-        status = self.lib.is_CameraStatus(self.h.value, ueye.STANDBY, ueye.TRUE)
+        status = self.lib.CameraStatus(self.h, ueye.STANDBY, ueye.TRUE)
         self.assertEqual(status, 0)
         self.assertTrue(self.camera.on_standby())
 
     def test_to_standby_device_on_standby(self):
         self.camera.to_standby_mode()
-        status = self.lib.is_CameraStatus(self.h.value, ueye.STANDBY, ueye.TRUE)
+        status = self.lib.CameraStatus(self.h, ueye.STANDBY, ueye.TRUE)
         self.assertEqual(status, 0)
         self.assertTrue(self.camera.on_standby())
 
     def test_out_of_standby(self):
         self.camera.to_standby_mode()
-        status = self.lib.is_CameraStatus(self.h.value, ueye.STANDBY,
-                                          ueye.FALSE)
+        status = self.lib.CameraStatus(self.h, ueye.STANDBY, ueye.FALSE)
         self.assertEqual(status, 0)
         self.assertTrue(self.camera.on_freerun())
 
     def test_out_of_standby_a_device_not_on_standby(self):
         ## After Init, a camera is in freerun mode.  Getting out of
         ## standby does not error, it simply does nothing.
-        status = self.lib.is_CameraStatus(self.h.value, ueye.STANDBY,
-                                          ueye.FALSE)
+        status = self.lib.CameraStatus(self.h, ueye.STANDBY, ueye.FALSE)
         self.assertEqual(status, 0)
         self.assertTrue(self.camera.on_freerun())
 
     def test_is_standby_supported(self):
-        status = self.lib.is_CameraStatus(self.h.value, ueye.STANDBY_SUPPORTED,
-                                          ueye.GET_STATUS)
+        status = self.lib.CameraStatus(self.h, ueye.STANDBY_SUPPORTED,
+                                       ueye.GET_STATUS)
         self.assertEqual(status, 1) # is supported
 
     def test_invalid_standby_supported(self):
@@ -480,18 +490,17 @@ class TestLibueye(unittest.TestCase):
         ## lib, we just raise an error since we should never be
         ## triggering it.
         with self.assertRaisesRegex(RuntimeError, 'GET_STATUS'):
-            self.lib.is_CameraStatus(self.h.value, ueye.STANDBY_SUPPORTED,
-                                     ueye.TRUE)
+            self.lib.CameraStatus(self.h, ueye.STANDBY_SUPPORTED, ueye.TRUE)
 
     def test_get_number_of_cameras(self):
         n_cameras = ctypes.c_int(0)
-        status = self.lib.is_GetNumberOfCameras(ctypes.pointer(n_cameras))
+        status = self.lib.GetNumberOfCameras(ctypes.byref(n_cameras))
         self.assertEqual(status, 0)
         self.assertEqual(n_cameras.value, 1)
 
     def test_empty_camera_list(self):
         camera_list = ueye.UEYE_CAMERA_LIST()
-        status = self.lib.is_GetCameraList(ctypes.pointer(camera_list))
+        status = self.lib.GetCameraList(ctypes.byref(camera_list))
         self.assertEqual(status, 0)
         self.assertEqual(camera_list.dwCount, 1)
         ## Because dwCount was set to zero, the camera info was not
@@ -503,13 +512,13 @@ class TestLibueye(unittest.TestCase):
         camera_list = ueye.camera_list_type_factory(4)()
         camera_list.dwCount = 4
         with self.assertRaisesRegex(NotImplementedError, 'number of devices'):
-            self.lib.is_GetCameraList(ctypes.cast(ctypes.byref(camera_list),
-                                                  ueye.PUEYE_CAMERA_LIST))
+            self.lib.GetCameraList(ctypes.cast(ctypes.byref(camera_list),
+                                               ueye.PUEYE_CAMERA_LIST))
 
     def test_get_camera_list(self):
         camera_list = ueye.UEYE_CAMERA_LIST()
         camera_list.dwCount = 1
-        status = self.lib.is_GetCameraList(ctypes.pointer(camera_list))
+        status = self.lib.GetCameraList(ctypes.pointer(camera_list))
         self.assertEqual(status, 0)
         self.assertEqual(camera_list.dwCount, 1)
         self.assertEqual(camera_list.uci[0].dwDeviceID, 1)
@@ -521,7 +530,7 @@ class TestLibueye(unittest.TestCase):
         self.camera.to_standby_mode()
         camera_list = ueye.UEYE_CAMERA_LIST()
         camera_list.dwCount = 1
-        self.lib.is_GetCameraList(ctypes.pointer(camera_list))
+        self.lib.GetCameraList(ctypes.pointer(camera_list))
         self.assertEqual(camera_list.uci[0].dwInUse, 1)
 
     def test_get_closed_camera_list(self):
@@ -529,13 +538,12 @@ class TestLibueye(unittest.TestCase):
         self.camera.to_closed_mode()
         camera_list = ueye.UEYE_CAMERA_LIST()
         camera_list.dwCount = 1
-        self.lib.is_GetCameraList(ctypes.pointer(camera_list))
+        self.lib.GetCameraList(ctypes.pointer(camera_list))
         self.assertEqual(camera_list.uci[0].dwInUse, 0)
 
     def test_get_sensor_info(self):
         sensor_info = ueye.SENSORINFO()
-        status = self.lib.is_GetSensorInfo(self.h.value,
-                                           ctypes.pointer(sensor_info))
+        status = self.lib.GetSensorInfo(self.h.value, ctypes.byref(sensor_info))
         self.assertEqual(status, 0)
         for attr, val in [('nMaxWidth', 1936), ('nMaxHeight', 1216),]:
             self.assertEqual(getattr(sensor_info, attr), val)

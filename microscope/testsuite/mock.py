@@ -23,15 +23,52 @@ import unittest.mock
 
 
 class MockCFuncPtr:
+    """Mock a C function, the attributes of a CDLL.
+
+    This mock is stricter than the real Python as it requires the
+    argtypes to be defined and defaults to an empty list instead of
+    `None`.
+
+    """
     def __init__(self, func: typing.Callable) -> None:
         self._func = func
-        self.argtypes = [] # typing.Sequence[of ctypes]
+        self.argtypes = [] # type: typing.Sequence[of ctypes]
         self.restype = ctypes.c_int
 
-    def __call__(self, *args, **kwargs) -> typing.Any:
-        prototype = ctypes.CFUNCTYPE(self.restype, *self.argtypes)
-        func = prototype(self._func)
-        return func(*args, **kwargs)
+    def __call__(self, *args) -> typing.Any:
+        ## With real ctypes functions, there is only an error if there
+        ## are not enough arguments and extra arguments are silently
+        ## discarded.  We are a bit more strict on the mock.
+        if len(args) != len(self.argtypes):
+            raise TypeError('this function takes %d arguments (%d given)'
+                            % (len(self.argtypes), len(args)))
+
+        ctypes_args = []
+        for arg, argtype in zip(args, self.argtypes):
+            ## Documentation of ctypes has other conversions.  There
+            ## are custom classes with from_param() class methods and
+            ## automatically converting to pointers.  We haven't
+            ## needed them yet so we don't mock them yet.
+            if isinstance(arg, argtype):
+                pass
+            elif arg.__class__.__name__ == 'CArgObject':
+                ## This is a pointer created with byref, so get a
+                ## real pointer.
+                arg = argtype(arg._obj)
+            else:
+                arg = argtype(arg)
+            ctypes_args.append(arg)
+
+        retval = self._func(*ctypes_args)
+
+        ## Confirm that the return value is of correct type, or at
+        ## least can be converted to it.  Do return the python data
+        ## type though.
+        try:
+            self.restype(retval)
+        except TypeError:
+            raise TypeError('this function return value is not compatible')
+        return retval
 
 
 class MockLib:
@@ -46,6 +83,10 @@ class MockCDLL:
         func = MockCFuncPtr(getattr(self._lib, name))
         setattr(self, name, func)
         return func
+
+    ## We didn't bother implementing __getitem__ because we don't yet
+    ## needed to mock a library whose functions are exported by
+    ## ordinal.
 
 
 @contextlib.contextmanager
