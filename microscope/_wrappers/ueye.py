@@ -52,6 +52,7 @@ _SDK = ctypes.CDLL(_libname)
 
 
 ## Error codes
+NO_SUCCESS = -1
 SUCCESS = 0
 INVALID_CAMERA_HANDLE = 1
 CANT_OPEN_DEVICE = 3 # returned by is_InitCamera

@@ -62,6 +62,7 @@ class UI306xCP_M(CameraMock):
 
         ## For SENSORINFO struct
         self.sensor_name = 'UI306xCP-M'
+        self.sensor_colourmode = 1
         self.width = 1936
         self.height = 1216
         self.pixel_size = 5.86 # µm
@@ -100,6 +101,14 @@ class UI306xCP_M(CameraMock):
         ]
         self._colourmode = 0 # type: int
 
+        ## There's no default trigger mode.  To enter in trigger mode,
+        ## we need to specify the trigger mode.
+        self._supported_trigger_modes = (ueye.SET_TRIGGER_SOFTWARE
+                                         | ueye.SET_TRIGGER_HI_LO
+                                         | ueye.SET_TRIGGER_LO_HI)
+        self._trigger_mode = 0 # type: int
+
+        ## FIXME: do time properly
         self._exposure_msec = 19.89156783
 
         self._reset_settings()
@@ -119,6 +128,11 @@ class UI306xCP_M(CameraMock):
         else:
             raise ValueError('not supported')
 
+    @property
+    def trigger_mode(self) -> int:
+        if not self.on_trigger():
+            raise RuntimeError('no trigger mode when not in trigger mode')
+        return self._trigger_mode
 
     def _reset_settings(self) -> None:
         ## Default mode is colour, despite this being a monochrome camera.
@@ -143,7 +157,10 @@ class UI306xCP_M(CameraMock):
     def to_freerun_mode(self) -> None:
         self.operation_mode = self.OperationMode.freerun
 
-    def to_trigger_mode(self) -> None:
+    def to_trigger_mode(self, trigger_mode: int) -> None:
+        if trigger_mode != (trigger_mode & self._supported_trigger_modes):
+            raise ValueError('trigger mode not supported')
+        self._trigger_mode = trigger_mode
         self.operation_mode = self.OperationMode.trigger
 
     def to_standby_mode(self) -> None:
@@ -358,7 +375,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
         pInfo.contents.SensorID = camera.sensor_id
         pInfo.contents.strSensorName = camera.sensor_name.encode()
-        pInfo.contents.nColorMode = camera.colourmode
+        pInfo.contents.nColorMode = camera.sensor_colourmode
         pInfo.contents.nMaxWidth = camera.width
         pInfo.contents.nMaxHeight = camera.height
         pInfo.contents.wPixelSize = int(camera.pixel_size * 100)
@@ -392,8 +409,29 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
         return 0
 
 
-    def is_SetExternalTrigger(self):
-        pass
+    def is_SetExternalTrigger(self, hCam, nTriggerMode):
+        try:
+            camera = self._system.get_camera(hCam.value)
+        except KeyError:
+            return 1
+        if camera.on_closed():
+            return 1
+
+        if nTriggerMode.value == ueye.GET_SUPPORTED_TRIGGER_MODE:
+            return camera._supported_trigger_modes
+        elif nTriggerMode.value == ueye.GET_EXTERNALTRIGGER:
+            if not camera.on_trigger():
+                return 0
+            else:
+                return camera.trigger_mode
+        elif nTriggerMode.value == ueye.GET_TRIGGER_STATUS:
+            raise NotImplementedError('not implemented return signal level')
+        else:
+            try:
+                camera.to_trigger_mode(nTriggerMode.value)
+            except ValueError:
+                return -1 # NO_SUCCESS
+            return 0
 
 
     def is_Exposure(self, hCam, nCommand, pParam, cbSizeOfParam):
@@ -450,6 +488,11 @@ class TestLibueyeWithoutCamera(unittest.TestCase):
 
     def test_set_colourmode(self):
         status = self.lib.SetColorMode(ueye.HIDS(1), ueye.CM_MONO10)
+        self.assertEqual(status, 1)
+
+    def test_set_triggermode(self):
+        status = self.lib.SetExternalTrigger(ueye.HIDS(1),
+                                             ueye.SET_TRIGGER_SOFTWARE)
         self.assertEqual(status, 1)
 
 
@@ -516,6 +559,11 @@ class TestLibueyeBeforeInit(unittest.TestCase):
 
     def test_set_colourmode(self):
         status = self.lib.SetColorMode(ueye.HIDS(1), ueye.CM_MONO10)
+        self.assertEqual(status, 1)
+
+    def test_set_triggermode(self):
+        status = self.lib.SetExternalTrigger(ueye.HIDS(1),
+                                             ueye.SET_TRIGGER_SOFTWARE)
         self.assertEqual(status, 1)
 
 
@@ -657,7 +705,8 @@ class TestLibueye(unittest.TestCase):
         status = self.lib.GetSensorInfo(self.h, ctypes.byref(sensor_info))
         self.assertEqual(status, 0)
         for attr, val in [('nMaxWidth', self.camera.width),
-                          ('nMaxHeight', self.camera.height),]:
+                          ('nMaxHeight', self.camera.height),
+                          ('nColorMode', chr(self.camera.sensor_colourmode).encode()),]:
             self.assertEqual(getattr(sensor_info, attr), val)
 
     def test_set_colourmode(self):
@@ -690,6 +739,40 @@ class TestLibueye(unittest.TestCase):
         self.camera.to_standby_mode()
         self.assertEqual(self.lib.SetColorMode(self.h, self.camera.colourmode),
                          ueye.INVALID_MODE)
+
+    def test_set_triggermode(self):
+        status = self.lib.SetExternalTrigger(self.h, ueye.SET_TRIGGER_SOFTWARE)
+        self.assertSuccess(status)
+        self.assertTrue(self.camera.on_trigger)
+        self.assertEqual(self.camera.trigger_mode, ueye.SET_TRIGGER_SOFTWARE)
+
+    def test_get_supported_trigger_modes(self):
+        modes = self.lib.SetExternalTrigger(self.h,
+                                            ueye.GET_SUPPORTED_TRIGGER_MODE)
+        self.assertEqual(modes, 4107)
+
+    def test_set_trigger_mode(self):
+        status = self.lib.SetExternalTrigger(self.h, ueye.SET_TRIGGER_SOFTWARE)
+        self.assertSuccess(status)
+        self.assertTrue(self.camera.on_trigger())
+        self.assertEqual(self.camera.trigger_mode, ueye.SET_TRIGGER_SOFTWARE)
+
+    def test_get_current_trigger_mode(self):
+        self.camera.to_trigger_mode(ueye.SET_TRIGGER_SOFTWARE)
+        mode = self.lib.SetExternalTrigger(self.h, ueye.GET_EXTERNALTRIGGER)
+        self.assertEqual(mode, ueye.SET_TRIGGER_SOFTWARE)
+
+    def test_get_current_trigger_mode_not_on_trigger_mode(self):
+        """Trigger mode 0 when not on trigger mode"""
+        mode = self.lib.SetExternalTrigger(self.h, ueye.GET_EXTERNALTRIGGER)
+        self.assertEqual(mode, 0)
+        self.camera.to_standby_mode()
+        mode = self.lib.SetExternalTrigger(self.h, ueye.GET_EXTERNALTRIGGER)
+        self.assertEqual(mode, 0)
+
+    def test_set_unsupported_trigger_mode(self):
+        status = self.lib.SetExternalTrigger(self.h, ueye.SET_TRIGGER_PRE_HI_LO)
+        self.assertEqual(status, -1)
 
 
 
