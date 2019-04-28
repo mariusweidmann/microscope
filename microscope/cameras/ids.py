@@ -155,9 +155,13 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
     def _set_our_default_state(self):
         ## This only works when camera is enabled, and will enabled the camera.
         ## by default, this is not useful
+        ## TODO: do this via the triggermixin methods
         self._trigger_mode = microscope.devices.TriggerMode.ONCE
         self._trigger_type = microscope.devices.TriggerType.SOFTWARE
-        status = ueye.SetExternalTrigger(self._hhandle, ueye.IS_SET_TRIGGER_SOFTWARE)
+        status = ueye.SetExternalTrigger(self._handle,
+                                         ueye.SET_TRIGGER_SOFTWARE)
+        if status != ueye.SUCCESS:
+            raise RuntimeError('failed to set software trigger mode')
         
 
         ## There's no function to find the supported colormodes, we
