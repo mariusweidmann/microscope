@@ -102,14 +102,16 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         self.enabled = True
         self._on_disable()
         self._on_enable()
-#        self._set_our_default_state()
+        self._set_our_default_state()
         ## XXX: we should be reading this from the camera
 
         self._sensor_shape = self._read_sensor_shape() # type: Tuple[int, int]
-        # self._exposure_time = self._read_exposure_time() # type: float
+        self._exposure_time = self._read_exposure_time() # type: float
         # self._exposure_range = self._read_exposure_range() # type: Tuple[float, float]
 
-        # self.disable()
+        ## After Init, the camera is in freerun mode (enabled).  We
+        ## need to disable it ourselves.
+        self.disable()
 
     def initialize(self, *args, **kwargs) -> None:
         pass # Already done in __init__
@@ -117,11 +119,11 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
     def _on_shutdown(self) -> None:
         status = ueye.ExitCamera(self._handle)
         if status != ueye.SUCCESS:
-            raise RuntimeError('failed to shutdown camera, returned %d'
+            raise RuntimeError('failed to shutdown camera (error code %d)'
                                % status)
 
     def enable(self) -> None:
-        ## FIXME: parent only sets to retunr of _on_enable, but should
+        ## FIXME: parent only sets to return of _on_enable, but should
         ## probably do it unless there's an error?
         super().enable()
         self.enabled = True
@@ -156,21 +158,19 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         # self._trigger_mode = microscope.devices.TriggerMode.ONCE
         # self._trigger_type = microscope.devices.TriggerType.SOFTWARE
 #        status = ueye.is_SetExternalTrigger(h, ueye.IS_SET_TRIGGER_SOFTWARE)
-#        status = ueye.SetColorMode(self._handle, ueye.CM_MONO8)
-#        if status != ueye.SUCCESS:
-#            raise RuntimeError('failed to set color mode')
-        ## There's no way to find the supported colormodes, we just
+
+        ## There's no function to find the supported colormodes, we
         ## need to try and see what works.
-        return
         for mode in (ueye.CM_SENSOR_RAW16, ueye.CM_SENSOR_RAW12,
                      ueye.CM_SENSOR_RAW10, ueye.CM_SENSOR_RAW8):
             status = ueye.SetColorMode(self._handle, mode)
             if status == ueye.SUCCESS:
                 break
-            elif status == ueye.INVALID_MODE:
+            elif status == ueye.INVALID_COLOR_FORMAT:
                 continue # try next mode
             else:
-                raise RuntimeError('failed to set color mode')
+                raise RuntimeError('failed to set color mode (error code %d)'
+                                   % status)
         else:
             raise RuntimeError('no colormode of interest is supported')
 
@@ -185,9 +185,15 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
     def _read_exposure_time(self) -> float:
         ## Only works when camera is enabled
         time_msec = ctypes.c_double()
-        status = ueye.is_Exposure(self._handle, ueye.IS_EXPOSURE_CMD_GET_EXPOSURE,
-                                  time_msec, ctypes.sizeof(time_msec))
-        if status != ueye.IS_SUCCESS:
+        ## TODO: we do the whole casting byref to void_p the hard way
+        ## so that it works fine in our mocked libs.  If we figure out
+        ## a way to do the right thing on MockCFuncPtr this could be
+        ## simplified.
+        status = ueye.Exposure(self._handle, ueye.EXPOSURE_CMD.GET_EXPOSURE,
+                               ctypes.cast(ctypes.byref(time_msec),
+                                           ctypes.c_void_p),
+                               ctypes.sizeof(time_msec))
+        if status != ueye.SUCCESS:
             raise RuntimeError('failed to to read exposure time')
         return (time_msec.value/1000)
 
@@ -360,6 +366,15 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
             raise RuntimeError('failed to get "colormode". Error code %d'
                                % colormode)
 
+    def __del__(self):
+        ## FIXME: we shouldn't need to do this.  But the parent
+        ## classes destructors will call disable() and then
+        ## enable(). But if __init__ failed for some reason, then
+        ## those methods will also fail, so we need to prevent those
+        ## errors.  This only works because once we have a valid
+        ## handler we set enabled to something.
+        if self.enabled is not None:
+            super().__del__()
 
 _BITS_TO_HORIZONTAL_BINNING = {
     0 : 1,

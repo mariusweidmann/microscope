@@ -279,7 +279,9 @@ class LaserTests(DeviceTests):
 
 
 class CameraTests(DeviceTests):
-    pass
+    def test_get_sensor_shape(self):
+        self.assertEqual(self.device.get_sensor_shape(),
+                         (self.fake.width, self.fake.height))
 
 
 class FilterWheelTests(DeviceTests):

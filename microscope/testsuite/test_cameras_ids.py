@@ -66,25 +66,63 @@ class UI306xCP_M(CameraMock):
         self.height = 1216
         self.pixel_size = 5.86 # µm
 
-        ## TODO: check actual values
-        self._suported_colormodes = [
-            ueye.CM_SENSOR_RAW8,
-            ueye.CM_SENSOR_RAW10,
-            ueye.CM_SENSOR_RAW12,
-            ueye.CM_SENSOR_RAW16,
-            ueye.CM_MONO8,
+        ## This is a monochrome camera but these RGB and other colour
+        ## modes are still supported.  Well, SetColorMode returns
+        ## success.  This is weird
+        self._supported_colourmodes = [
+            ueye.CM_BGR10_PACKED,
+            ueye.CM_BGR10_UNPACKED,
+            ueye.CM_BGR12_UNPACKED,
+            ueye.CM_BGR565_PACKED,
+            ueye.CM_BGR5_PACKED,
+            ueye.CM_BGR8_PACKED,
+            ueye.CM_BGRA12_UNPACKED,
+            ueye.CM_BGRA8_PACKED,
+            ueye.CM_BGRY8_PACKED,
             ueye.CM_MONO10,
             ueye.CM_MONO12,
             ueye.CM_MONO16,
+            ueye.CM_MONO8,
+            ueye.CM_RGB10_UNPACKED,
+            ueye.CM_RGB12_UNPACKED,
+            ueye.CM_RGB8_PACKED,
+            ueye.CM_RGB8_PLANAR,
+            ueye.CM_RGBA12_UNPACKED,
+            ueye.CM_RGBA8_PACKED,
+            ueye.CM_RGBY8_PACKED,
+            ueye.CM_SENSOR_RAW10,
+            ueye.CM_SENSOR_RAW12,
+            ueye.CM_SENSOR_RAW16,
+            ueye.CM_SENSOR_RAW8,
+            ueye.CM_UYVY_BAYER_PACKED,
+            ueye.CM_UYVY_MONO_PACKED,
+            ueye.CM_UYVY_PACKED,
         ]
+        self._colourmode = 0 # type: int
+
+        self._exposure_msec = 19.89156783
 
         self._reset_settings()
 
     def supports_standby(self) -> bool:
         return True
 
+
+    @property
+    def colourmode(self):
+        return self._colourmode
+
+    @colourmode.setter
+    def colourmode(self, new_colourmode):
+        if new_colourmode in self._supported_colourmodes:
+            self._colourmode = new_colourmode
+        else:
+            raise ValueError('not supported')
+
+
     def _reset_settings(self) -> None:
-        pass
+        ## Default mode is colour, despite this being a monochrome camera.
+        self._colourmode = ueye.CM_BGR8_PACKED
 
     def on_closed(self) -> bool:
         return self.operation_mode == self.OperationMode.closed
@@ -320,19 +358,60 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
         pInfo.contents.SensorID = camera.sensor_id
         pInfo.contents.strSensorName = camera.sensor_name.encode()
-#        pInfo.contents.nColorMode = camera. # TODO: colormode
+        pInfo.contents.nColorMode = camera.colourmode
         pInfo.contents.nMaxWidth = camera.width
         pInfo.contents.nMaxHeight = camera.height
         pInfo.contents.wPixelSize = int(camera.pixel_size * 100)
         return 0
 
 
-    def is_SetColorMode(self):
-        pass
+    def is_SetColorMode(self, hCam, Mode):
+        try:
+            camera = self._system.get_camera(hCam.value)
+        except KeyError:
+            return 1 # IS_INVALID_CAMERA_HANDLE
+        if camera.on_closed():
+            return 1 # IS_INVALID_CAMERA_HANDLE
+
+        if Mode.value == ueye.GET_COLOR_MODE:
+            return camera.colourmode
+        elif camera.on_standby():
+            ## colourmode can't be set while on standby mode
+            return 101 # INVALID_MODE
+
+        try:
+            camera.colourmode = Mode.value
+        except ValueError:
+            ## This can fail for two reasons.  The camera does not
+            ## support this colourmode (INVALID_COLOR_FORMAT) or the
+            ## value is not a colourmode (INVALID_PARAMETER).  We only
+            ## mock the first behaviour because we don't have a list
+            ## of all possible colourmodes.
+            return 174 # INVALID_COLOR_FORMAT
+
+        return 0
 
 
     def is_SetExternalTrigger(self):
         pass
+
+
+    def is_Exposure(self, hCam, nCommand, pParam, cbSizeOfParam):
+        try:
+            camera = self._system.get_camera(hCam.value)
+        except KeyError:
+            return 1
+        if camera.on_closed():
+            return 1
+
+        if nCommand.value == ueye.EXPOSURE_CMD.GET_EXPOSURE:
+            if cbSizeOfParam.value != 8:
+                return ueye.INVALID_PARAMETER
+            param = ctypes.cast(pParam, ctypes.POINTER(ctypes.c_double))
+            param.contents.value = camera._exposure_msec
+            return 0
+        else:
+            raise NotImplementedError()
 
 
 class TestLibueyeWithoutCamera(unittest.TestCase):
@@ -368,6 +447,10 @@ class TestLibueyeWithoutCamera(unittest.TestCase):
         status = self.lib.GetNumberOfCameras(ctypes.byref(n_cameras))
         self.assertEqual(status, 0)
         self.assertEqual(n_cameras.value, 0)
+
+    def test_set_colourmode(self):
+        status = self.lib.SetColorMode(ueye.HIDS(1), ueye.CM_MONO10)
+        self.assertEqual(status, 1)
 
 
 class TestLibueyeBeforeInit(unittest.TestCase):
@@ -431,6 +514,10 @@ class TestLibueyeBeforeInit(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(n_cameras.value, 1)
 
+    def test_set_colourmode(self):
+        status = self.lib.SetColorMode(ueye.HIDS(1), ueye.CM_MONO10)
+        self.assertEqual(status, 1)
+
 
 class TestLibueye(unittest.TestCase):
     """There is only one camera plugged in, so its device ID is 1.
@@ -443,11 +530,13 @@ class TestLibueye(unittest.TestCase):
             self.lib = importlib.reload(ueye)
         self.camera = UI306xCP_M()
         self.system.plug_camera(self.camera)
-
         self.h = ueye.HIDS(1 | ueye.USE_DEVICE_ID)
         status = self.lib.InitCamera(ctypes.byref(self.h), None)
         if status != 0:
             raise RuntimeError('error in InitCamera during setUp')
+
+    def assertSuccess(self, status, msg=None):
+        self.assertEqual(status, 0, msg)
 
     def test_initial_operation_mode(self):
         """After Init, camera is in freerun mode"""
@@ -466,37 +555,37 @@ class TestLibueye(unittest.TestCase):
 
     def test_exit(self):
         """Exit an Init camera works"""
-        self.assertEqual(self.lib.ExitCamera(self.h), 0)
+        self.assertSuccess(self.lib.ExitCamera(self.h))
         self.assertTrue(self.camera.on_closed())
 
     def test_exit_twice(self):
         """Exit a closed camera fails"""
-        self.assertEqual(self.lib.ExitCamera(self.h), 0)
+        self.assertSuccess(self.lib.ExitCamera(self.h))
         self.assertEqual(self.lib.ExitCamera(self.h), 1)
         self.assertTrue(self.camera.on_closed())
 
     def test_to_standby(self):
-        status = self.lib.CameraStatus(self.h, ueye.STANDBY, ueye.TRUE)
-        self.assertEqual(status, 0)
+        self.assertSuccess(self.lib.CameraStatus(self.h, ueye.STANDBY,
+                                                 ueye.TRUE))
         self.assertTrue(self.camera.on_standby())
 
     def test_to_standby_device_on_standby(self):
         self.camera.to_standby_mode()
-        status = self.lib.CameraStatus(self.h, ueye.STANDBY, ueye.TRUE)
-        self.assertEqual(status, 0)
+        self.assertSuccess(self.lib.CameraStatus(self.h, ueye.STANDBY,
+                                                 ueye.TRUE))
         self.assertTrue(self.camera.on_standby())
 
     def test_out_of_standby(self):
         self.camera.to_standby_mode()
-        status = self.lib.CameraStatus(self.h, ueye.STANDBY, ueye.FALSE)
-        self.assertEqual(status, 0)
+        self.assertSuccess(self.lib.CameraStatus(self.h, ueye.STANDBY,
+                                                 ueye.FALSE))
         self.assertTrue(self.camera.on_freerun())
 
     def test_out_of_standby_a_device_not_on_standby(self):
         ## After Init, a camera is in freerun mode.  Getting out of
         ## standby does not error, it simply does nothing.
-        status = self.lib.CameraStatus(self.h, ueye.STANDBY, ueye.FALSE)
-        self.assertEqual(status, 0)
+        self.assertSuccess(self.lib.CameraStatus(self.h, ueye.STANDBY,
+                                                 ueye.FALSE))
         self.assertTrue(self.camera.on_freerun())
 
     def test_is_standby_supported(self):
@@ -565,14 +654,72 @@ class TestLibueye(unittest.TestCase):
 
     def test_get_sensor_info(self):
         sensor_info = ueye.SENSORINFO()
-        status = self.lib.GetSensorInfo(self.h.value, ctypes.byref(sensor_info))
+        status = self.lib.GetSensorInfo(self.h, ctypes.byref(sensor_info))
         self.assertEqual(status, 0)
         for attr, val in [('nMaxWidth', self.camera.width),
                           ('nMaxHeight', self.camera.height),]:
             self.assertEqual(getattr(sensor_info, attr), val)
 
+    def test_set_colourmode(self):
+        self.assertSuccess(self.lib.SetColorMode(self.h, ueye.CM_MONO16))
+        self.assertEqual(self.camera.colourmode, ueye.CM_MONO16)
+
+    def test_get_colourmode(self):
+        self.assertEqual(self.lib.SetColorMode(self.h, ueye.GET_COLOR_MODE),
+                         self.camera.colourmode)
+
+    def test_set_unsupported_colourmode(self):
+        self.assertEqual(self.lib.SetColorMode(self.h, ueye.CM_RGB10_PACKED),
+                         ueye.INVALID_COLOR_FORMAT)
+        ## There is also error code 125 (INVALID_PARAMETER) if we use
+        ## an invalid colourmode such as CM_MODE_MASK.
+
+    def test_get_colourmode_on_standby(self):
+        """Can get current colourmode while on standby"""
+        self.camera.to_standby_mode()
+        self.assertEqual(self.lib.SetColorMode(self.h, ueye.GET_COLOR_MODE),
+                         self.camera.colourmode)
+
+    def test_set_colourmode_on_standby(self):
+        self.camera.to_standby_mode()
+        self.assertEqual(self.lib.SetColorMode(self.h, ueye.CM_MONO16),
+                         ueye.INVALID_MODE)
+
+    def test_set_same_colourmode_on_standby(self):
+        ## Fails even if the "new" colourmode is the same as the current.
+        self.camera.to_standby_mode()
+        self.assertEqual(self.lib.SetColorMode(self.h, self.camera.colourmode),
+                         ueye.INVALID_MODE)
+
+
+
 ## TODO: need to add tests for GetCameraList with more than one camera
 ## so we can test for the struct hack there.
+
+class InitUI306xCP_M(unittest.TestCase):
+    def setUp(self):
+        system = MockSystem()
+
+        ## TODO: Maybe the libnames should be properties on the lib?
+        ## Or maybe we should limit the patching to the only place
+        ## where the patch is needed and skip the names altogether,
+        lib  = MockLibueye(system)
+        libnames = ['libueye_api.so', 'ueye_api', 'ueye_api_64']
+
+        with microscope.testsuite.mock.mocked_c_dll(lib, libnames):
+            ## We only need to reload the ueye wrapper module, since
+            ## it also affects the already loaded ids camera module.
+            importlib.reload(ueye)
+
+        self.fake = UI306xCP_M()
+        system.plug_camera(self.fake)
+
+    def test_init_by_serial_number(self):
+        self.device = microscope.cameras.ids.IDSuEye(self.fake.serial_number)
+
+    def test_incorrect_serial_number(self):
+        with self.assertRaisesRegex(RuntimeError, 'serial number'):
+            microscope.cameras.ids.IDSuEye('1' + self.fake.serial_number)
 
 
 class TestUI306xCP_M(unittest.TestCase,
