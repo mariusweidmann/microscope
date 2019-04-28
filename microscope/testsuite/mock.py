@@ -28,7 +28,6 @@ class MockCFuncPtr:
     This mock is stricter than the real Python as it requires the
     argtypes to be defined and defaults to an empty list instead of
     `None`.
-
     """
     def __init__(self, func: typing.Callable) -> None:
         self._func = func
@@ -88,6 +87,19 @@ class MockCDLL:
     ## needed to mock a library whose functions are exported by
     ## ordinal.
 
+
+@contextlib.contextmanager
+def patched_cdll():
+    """Context for CDLL MagickMock.
+
+    .. todo::
+
+       Merge with the version that replaces with a specific mock.
+    """
+    with unittest.mock.patch('ctypes.CDLL') as patch_cdll:
+        ## WinDLL will only exist on windows systems.
+        with unittest.mock.patch('ctypes.WinDLL', create=True) as patch_windll:
+            yield (patch_cdll, patch_windll)
 
 @contextlib.contextmanager
 def mocked_c_dll(lib: MockLib, names: typing.Sequence[str]):

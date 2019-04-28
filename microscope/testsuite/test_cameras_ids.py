@@ -16,11 +16,9 @@
 ## You should have received a copy of the GNU General Public License
 ## along with Microscope.  If not, see <http://www.gnu.org/licenses/>.
 
-import contextlib
 import ctypes
 import enum
 import importlib
-import sys
 import typing
 import unittest
 import unittest.mock
@@ -32,7 +30,7 @@ import microscope.testsuite.test_devices
 ##
 ## Import the camera module after the import of the wrapper with
 ## the mocked CDLL
-with unittest.mock.patch('ctypes.CDLL'):
+with microscope.testsuite.mock.patched_cdll():
     from microscope._wrappers import ueye
 import microscope.cameras.ids
 
@@ -67,6 +65,18 @@ class UI306xCP_M(CameraMock):
         self.width = 1936
         self.height = 1216
         self.pixel_size = 5.86 # µm
+
+        ## TODO: check actual values
+        self._suported_colormodes = [
+            ueye.CM_SENSOR_RAW8,
+            ueye.CM_SENSOR_RAW10,
+            ueye.CM_SENSOR_RAW12,
+            ueye.CM_SENSOR_RAW16,
+            ueye.CM_MONO8,
+            ueye.CM_MONO10,
+            ueye.CM_MONO12,
+            ueye.CM_MONO16,
+        ]
 
         self._reset_settings()
 
@@ -181,6 +191,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
         super().__init__()
         self._system = system
 
+
     def is_InitCamera(self, phCam, hWnd):
         if hWnd.value is not None:
             raise NotImplementedError('we only run in DIB mode')
@@ -211,6 +222,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
         hCam.value = self._system.get_device_id(camera)
         return 0 # IS_SUCCESS
 
+
     def is_CameraStatus(self, hCam, nInfo, ulValue):
         try:
             camera = self._system.get_camera(hCam.value)
@@ -240,8 +252,10 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
             raise NotImplementedError()
         return ueye.SUCCESS
 
+
     def is_DeviceInfo(self):
         pass
+
 
     def is_ExitCamera(self, hCam):
         try:
@@ -252,6 +266,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
             return 1 # IS_INVALID_CAMERA_HANDLE
         camera.to_closed_mode()
         return 0 # IS_SUCCESS
+
 
     def is_GetCameraList(self, pucl):
         n_cameras = self._system.n_cameras
@@ -314,6 +329,8 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
     def is_SetColorMode(self):
         pass
+
+
     def is_SetExternalTrigger(self):
         pass
 
@@ -374,6 +391,11 @@ class TestLibueyeBeforeInit(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(h.value, 1)
         self.assertTrue(self.camera.on_freerun())
+
+    def test_init_with_window_handle(self):
+        h = ueye.HIDS(1)
+        with self.assertRaisesRegex(NotImplementedError, 'DIB mode'):
+            self.lib.InitCamera(ctypes.byref(h), ctypes.c_void_p(1))
 
     def test_camera_closed_before_init(self):
         self.assertTrue(self.camera.on_closed())
@@ -545,7 +567,8 @@ class TestLibueye(unittest.TestCase):
         sensor_info = ueye.SENSORINFO()
         status = self.lib.GetSensorInfo(self.h.value, ctypes.byref(sensor_info))
         self.assertEqual(status, 0)
-        for attr, val in [('nMaxWidth', 1936), ('nMaxHeight', 1216),]:
+        for attr, val in [('nMaxWidth', self.camera.width),
+                          ('nMaxHeight', self.camera.height),]:
             self.assertEqual(getattr(sensor_info, attr), val)
 
 ## TODO: need to add tests for GetCameraList with more than one camera
