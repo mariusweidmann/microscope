@@ -162,7 +162,10 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
                                          ueye.SET_TRIGGER_SOFTWARE)
         if status != ueye.SUCCESS:
             raise RuntimeError('failed to set software trigger mode')
-        
+
+        ## TODO: we don't know what should be default.  We do need to
+        ## change it because by default it's not even a grayscale
+        ## thing.
 
         ## There's no function to find the supported colormodes, we
         ## need to try and see what works.

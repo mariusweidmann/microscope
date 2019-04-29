@@ -16,10 +16,78 @@
 ## You should have received a copy of the GNU General Public License
 ## along with Microscope.  If not, see <http://www.gnu.org/licenses/>.
 
+import abc
 import contextlib
 import ctypes
 import typing
 import unittest.mock
+
+
+class DeviceMock(metaclass=abc.ABCMeta):
+    @abc.abstractmethod
+    def supports_enabling(self) -> bool:
+        """Whether this device can be enabled/disabled.
+
+        A device that supports this can be enabled and disabled
+        multiple times, it is not a one time thing only.
+        """
+        raise NotImplementedError()
+
+
+class LaserMock(DeviceMock, metaclass=abc.ABCMeta):
+    @property
+    @abc.abstractmethod
+    def min_power(self) -> float:
+        """Min power in mW laser is capable of."""
+        raise NotImplementedError()
+
+    @property
+    @abc.abstractmethod
+    def max_power(self) -> float:
+        """Max power in mW laser is capable of."""
+        raise NotImplementedError()
+
+    @property
+    @abc.abstractmethod
+    def current_power(self) -> float:
+        """The current laser power in mW (should return 0 if off)"""
+        raise NotImplementedError()
+
+    @current_power.setter
+    @abc.abstractmethod
+    def current_power(self, power: float) -> None:
+        """Set current laser power.
+
+        Should raise an erro if trying to set outside the valid range
+        or the device is off.
+        """
+        raise NotImplementedError()
+
+
+class DeformableMirrorMock(DeviceMock, metaclass=abc.ABCMeta):
+    @property
+    @abc.abstractmethod
+    def n_actuators(self) -> int:
+        raise NotImplementedError()
+
+    @property
+    @abc.abstractmethod
+    def current_pattern(self): # -> numpy.ndarray (1D)
+        raise NotImplementedError()
+
+
+class CameraMock(DeviceMock, metaclass=abc.ABCMeta):
+    @property
+    @abc.abstractmethod
+    def sensor_width(self) -> int:
+        """Width of sensor in pixels"""
+        raise NotImplementedError()
+
+    @property
+    @abc.abstractmethod
+    def sensor_height(self) -> int:
+        """Height of sensor in pixels"""
+        raise NotImplementedError()
 
 
 class MockCFuncPtr:
@@ -31,7 +99,7 @@ class MockCFuncPtr:
     """
     def __init__(self, func: typing.Callable) -> None:
         self._func = func
-        self.argtypes = [] # type: typing.Sequence[of ctypes]
+        self.argtypes = [] # type: typing.Sequence
         self.restype = ctypes.c_int
 
     def __call__(self, *args) -> typing.Any:
