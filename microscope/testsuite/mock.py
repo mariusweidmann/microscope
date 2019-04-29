@@ -24,6 +24,12 @@ import unittest.mock
 
 
 class DeviceMock(metaclass=abc.ABCMeta):
+    """Base class for mocking of a device hardware
+
+    You probably should be subclassing the base classes for device
+    specific hardware such as `LaserMock`, `CameraMock`, etc.
+
+    """
     @abc.abstractmethod
     def supports_enabling(self) -> bool:
         """Whether this device can be enabled/disabled.

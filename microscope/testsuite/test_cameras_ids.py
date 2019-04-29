@@ -37,7 +37,7 @@ import microscope.cameras.ids
 
 
 class OperationMode(enum.Enum):
-    """Operation mode of IDS cameras"""
+    """Operation modes of IDS cameras"""
     closed = 0 # not opened yet, or shutdown
     ## Operation modes (when opened, not closed):
     freerun = 1
@@ -45,40 +45,63 @@ class OperationMode(enum.Enum):
     standby = 3
 
 
-class IDSCameraMock(microscope.testsuite.mock.CameraMock):
+TRIGGER_MODES = [
+    ueye.SET_TRIGGER_MASK,
+    ueye.SET_TRIGGER_CONTINUOUS,
+    ueye.SET_TRIGGER_HI_LO,
+    ueye.SET_TRIGGER_LO_HI,
+    ueye.SET_TRIGGER_SOFTWARE,
+    ueye.SET_TRIGGER_HI_LO_SYNC,
+    ueye.SET_TRIGGER_LO_HI_SYNC,
+    ueye.SET_TRIGGER_PRE_HI_LO,
+    ueye.SET_TRIGGER_PRE_LO_HI,
+]
+
+
+class IDSCameraMock(microscope.testsuite.mock.CameraMock,
+                    metaclass=abc.ABCMeta):
     def __init__(self) -> None:
         self._operation_mode = OperationMode.closed # type: OperationMode
         self._trigger_mode = 0 # type: int
 
     @property
     @abc.abstractmethod
-    def supported_trigger_modes(self) -> int:
-        ## A logical OR of all supported mode ints
+    def supported_trigger_modes(self) -> typing.Iterable[int]:
+        """A list of all supported modes"""
         raise NotImplementedError()
 
     @property
-    def trigger_mode(self) -> int:
-        """Mode
+    def unsupported_trigger_modes(self) -> typing.Iterable[int]:
+        return set(TRIGGER_MODES) ^ set(self.supported_trigger_modes)
 
-        There is no setter for this property because it is set when
-        entering trigger mode.  To change, re-enter with a different
-        trigger mode.
-        """
+    @property
+    def _supported_trigger_modes_mask(self) -> int:
+        mask = 0
+        for mode in self.supported_trigger_modes:
+            mask |= mode
+        return mask
+
+    @property
+    def trigger_mode(self) -> int:
+        ## No setter for this property, it's set when entering trigger
+        ## mode.  To change, re-enter with a different trigger mode.
         if not self.on_trigger_mode():
-            raise RuntimeError()
+            raise RuntimeError('no trigger mode when not in trigger mode')
         return self._trigger_mode
 
     def to_closed_mode(self) -> None:
         self._operation_mode = OperationMode.closed
+
     def to_freerun_mode(self) -> None:
         self._operation_mode = OperationMode.freerun
+
     def to_trigger_mode(self, trigger_mode: int) -> None:
         ## FIXME: having an argument here seems like each should be
         ## its own state
-        if trigger_mode != (trigger_mode & self.supported_trigger_modes):
+        if trigger_mode not in self.supported_trigger_modes:
             raise ValueError('trigger mode not supported')
         self._trigger_mode = trigger_mode
-        self.operation_mode = OperationMode.trigger
+        self._operation_mode = OperationMode.trigger
 
     def to_standby_mode(self) -> None:
         self._operation_mode = OperationMode.standby
@@ -110,8 +133,6 @@ class UI306xCP_M(IDSCameraMock):
         ## For SENSORINFO struct
         self.sensor_name = 'UI306xCP-M'
         self.sensor_colourmode = 1
-        self._sensor_width = 1936
-        self._sensor_height = 1216
         self.pixel_size = 5.86 # µm
 
         ## This is a monochrome camera but these RGB and other colour
@@ -148,13 +169,6 @@ class UI306xCP_M(IDSCameraMock):
         ]
         self._colourmode = 0 # type: int
 
-        ## There's no default trigger mode.  To enter in trigger mode,
-        ## we need to specify the trigger mode.
-        self._supported_trigger_modes = (ueye.SET_TRIGGER_SOFTWARE
-                                         | ueye.SET_TRIGGER_HI_LO
-                                         | ueye.SET_TRIGGER_LO_HI)
-        self._trigger_mode = 0 # type: int
-
         ## FIXME: do time properly
         self._exposure_msec = 19.89156783
 
@@ -165,11 +179,19 @@ class UI306xCP_M(IDSCameraMock):
 
     @property
     def sensor_width(self) -> int:
-        return self._sensor_width
+        return 1936
 
     @property
     def sensor_height(self) -> int:
-        return self._sensor_height
+        return 1216
+
+    @property
+    def supported_trigger_modes(self) -> typing.Iterable[int]:
+        return [
+            ueye.SET_TRIGGER_SOFTWARE,
+            ueye.SET_TRIGGER_HI_LO,
+            ueye.SET_TRIGGER_LO_HI,
+        ]
 
     @property
     def colourmode(self):
@@ -189,6 +211,85 @@ class UI306xCP_M(IDSCameraMock):
     def to_closed_mode(self) -> None:
         super().to_closed_mode()
         self._reset_settings()
+
+
+class TestIDSCameraMock:
+    """Tests for all IDS camera mocks, to be mixed in unittest.TestCase.
+
+    For each IDS camera mock, we create a TestCase class, and define
+    the `camera` property during `setUp()`.
+    """
+
+    ## Declared for type checking tools
+    camera: IDSCameraMock
+    assertTrue: typing.Callable
+    assertEqual: typing.Callable
+
+    def assertToClosed(self, msg=None):
+        self.camera.to_closed_mode()
+        self.assertTrue(self.camera.on_closed_mode(), msg)
+
+    def assertToFreerun(self, msg=None):
+        self.camera.to_freerun_mode()
+        self.assertTrue(self.camera.on_freerun_mode(), msg)
+
+    def assertToStandby(self, msg=None):
+        self.camera.to_standby_mode()
+        self.assertTrue(self.camera.on_standby_mode(), msg)
+
+    def assertToTrigger(self, tmode: int, msg=None):
+        self.camera.to_trigger_mode(tmode)
+        self.assertTrue(self.camera.on_trigger_mode(), msg)
+        self.assertEqual(self.camera.trigger_mode, tmode, msg)
+
+    def test_starts_closed(self):
+        self.assertTrue(self.camera.on_closed_mode())
+
+    def test_to_freerun_mode_and_back(self):
+        self.assertToFreerun()
+        self.assertToClosed()
+
+    def test_from_closed_to_standby_and_back(self):
+        ## When camera is in closed mode, the SDK only allows going to
+        ## freerun mode.  We have that limitation on our mock of the
+        ## SDK but not on the camera itself because makes it easier to
+        ## write tests that start with the camera in a specific state.
+        self.assertToStandby()
+        self.assertToClosed()
+
+    def test_from_closed_to_trigger_and_back(self):
+        ## See other comment about testing from closed to trigger mode
+        for tmode in self.camera.supported_trigger_modes:
+            self.assertToTrigger(tmode)
+            break # only the first is from closed mode
+        self.assertToClosed()
+
+    def test_supported_trigger_modes(self):
+        for tmode in self.camera.supported_trigger_modes:
+            self.assertToTrigger(tmode)
+
+    def test_unsupported_trigger_mode(self):
+        """Unsupported modes fail and camera stays on previous mode"""
+        self.camera.to_freerun_mode()
+        for tmode in self.camera.unsupported_trigger_modes:
+            with self.assertRaisesRegex(ValueError, ' mode not supported'):
+                self.camera.to_trigger_mode(tmode)
+            self.assertTrue(self.camera.on_freerun_mode())
+
+    def test_getting_trigger_mode_in_other_modes(self):
+        def test_it_fails():
+            with self.assertRaisesRegex(RuntimeError, 'not in trigger mode'):
+                self.camera.trigger_mode
+        test_it_fails() # in closed mode
+        self.assertToFreerun()
+        test_it_fails()
+        self.assertToStandby()
+        test_it_fails()
+
+
+class TestUI306xCP_MMock(TestIDSCameraMock, unittest.TestCase):
+    def setUp(self):
+        self.camera = UI306xCP_M()
 
 
 class MockSystem:
@@ -438,7 +539,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
             return 1
 
         if nTriggerMode.value == ueye.GET_SUPPORTED_TRIGGER_MODE:
-            return camera._supported_trigger_modes
+            return camera._supported_trigger_modes_mask
         elif nTriggerMode.value == ueye.GET_EXTERNALTRIGGER:
             if not camera.on_trigger_mode():
                 return 0
