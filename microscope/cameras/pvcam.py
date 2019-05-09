@@ -1172,10 +1172,10 @@ class PVCamera(devices.FloatingDeviceMixin, devices.CameraDevice):
     open_cameras = []
 
 
-    def __init__(self, *args, **kwargs):
-        super(PVCamera, self).__init__(**kwargs)
+    def __init__(self, index=0, buffer_length=0):
+        super().__init__(buffer_length=buffer_length)
         # Camera index in DLL.
-        self._index = kwargs.get('index', 0)
+        self._index = index
         # Camera name in DLL.
         self._pv_name = None
         # Camera handle.

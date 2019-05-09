@@ -100,11 +100,12 @@ INVALIDATES_BUFFERS = ['_simple_pre_amp_gain_control', '_pre_amp_gain_control',
 class AndorSDK3(devices.FloatingDeviceMixin,
                 devices.CameraDevice):
     SDK_INITIALIZED = False
-    def __init__(self, *args, **kwargs):
-        super(AndorSDK3, self).__init__(**kwargs)
+    def __init__(self, index=0, buffer_length=0):
+        super().__init__(buffer_length=buffer_length)
+        self._index = index
+
         if not AndorSDK3.SDK_INITIALIZED:
             SDK3.InitialiseLibrary()
-        self._index = kwargs.get('index', 0)
         self.handle = None
         #self._sdk3cam = SDK3Camera(self._index)
         #SDK3Camera.__init__(self, self._index)

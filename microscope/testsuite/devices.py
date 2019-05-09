@@ -41,8 +41,8 @@ class CamEnum(IntEnum):
 
 @Pyro4.behavior('single')
 class TestCamera(devices.CameraDevice):
-    def __init__(self, *args, **kwargs):
-        super(TestCamera, self).__init__(**kwargs)
+    def __init__(self, buffer_length=0):
+        super().__init__(buffer_length=buffer_length)
         # Binning and ROI
         self._roi = (0,0,511,511)
         self._binning = (1,1)
@@ -201,8 +201,8 @@ class TestCamera(devices.CameraDevice):
 
 
 class TestFilterWheel(FilterWheelBase):
-    def __init__(self, *args, **kwargs):
-        super(TestFilterWheel, self).__init__(*args, **kwargs)
+    def __init__(self, filters=[], positions=0):
+        super().__init__(filters=filters, positions=positions)
         self._position = 0
 
     def get_position(self):
@@ -221,8 +221,8 @@ class TestFilterWheel(FilterWheelBase):
 
 
 class TestLaser(devices.LaserDevice):
-    def __init__(self, *args, **kwargs):
-        super(TestLaser, self).__init__()
+    def __init__(self):
+        super().__init__()
         self._set_point = 0.0
         self._power = 0.0
         self._emission = False
@@ -265,8 +265,8 @@ class TestLaser(devices.LaserDevice):
 
 
 class TestDeformableMirror(devices.DeformableMirror):
-    def __init__(self, n_actuators, *args, **kwargs):
-        super(TestDeformableMirror, self).__init__(*args, **kwargs)
+    def __init__(self, n_actuators):
+        super().__init__()
         self._n_actuators = n_actuators
 
     def apply_pattern(self, pattern):
@@ -279,8 +279,8 @@ class TestDeformableMirror(devices.DeformableMirror):
 
 @Pyro4.behavior('single')
 class DummySLM(devices.Device):
-    def __init__(self, *args, **kwargs):
-        devices.Device.__init__(self, args, kwargs)
+    def __init__(self):
+        super().__init__()
         self.sim_diffraction_angle = 0.
         self.sequence_params = []
         self.sequence_index = 0
@@ -322,8 +322,8 @@ class DummySLM(devices.Device):
 
 @Pyro4.behavior('single')
 class DummyDSP(devices.Device):
-    def __init__(self, *args, **kwargs):
-        devices.Device.__init__(self, args, kwargs)
+    def __init__(self):
+        super().__init__()
         self._digi = 0
         self._ana = [0,0,0,0]
         self._client = None

@@ -93,14 +93,12 @@ class Filter(logging.Filter):
 
 
 class DeviceServer(multiprocessing.Process):
-    def __init__(self, device_def, id_to_host, id_to_port, count=0,
-                 exit_event=None):
+    def __init__(self, device_def, id_to_host, id_to_port, exit_event=None):
         """Initialise a device and serve at host/port according to its id.
 
         :param device_def: definition of the device
         :param id_to_host: host or mapping of device identifiers to hostname
         :param id_to_port: map or mapping of device identifiers to port number
-        :param count:      this is the countth process serving this class
         :param exit_event: a shared event to signal that the process
             should quit.
         """
@@ -114,8 +112,6 @@ class DeviceServer(multiprocessing.Process):
         self.exit_event = exit_event
         super(DeviceServer, self).__init__()
         self.daemon = True
-        # Some SDKs need an index to access more than one device.
-        self.count = count
 
     def run(self):
         logger = logging.getLogger(self._device_def['cls'].__name__)
@@ -132,8 +128,15 @@ class DeviceServer(multiprocessing.Process):
         logger.addHandler(stderr_handler)
         logger.addFilter(Filter())
         logger.debug("Debugging messages on.")
-        self._device = self._device_def['cls'](index=self.count,
-                                               **self._device_def)
+
+        ## The device definition includes a bunch of values that are
+        ## only meant for device server.  Don't pass them on.
+        cls_kwargs = {}
+        for key, value in self._device_def.items():
+            if key not in ['cls', 'host', 'port', 'uid']:
+                cls_kwargs[key] = value
+
+        self._device = self._device_def['cls'](**cls_kwargs)
         while not self.exit_event.is_set():
             try:
                 self._device.initialize()
@@ -232,9 +235,6 @@ def serve_devices(devices, exit_event=None):
         sys.exit()
 
     for cls, devs in by_class.items():
-        # Keep track of how many of these classes we have set up.
-        # Some SDKs need this information to index devices.
-        count = 0
         if issubclass(cls, FloatingDeviceMixin):
             # Need to provide maps of uid to host and port.
             uid_to_host = {}
@@ -243,16 +243,21 @@ def serve_devices(devices, exit_event=None):
                 uid = dev['uid']
                 uid_to_host[uid] = dev['host']
                 uid_to_port[uid] = dev['port']
+            # Keep track of how many of these classes we have set up.
+            # Some SDKs need this information to index devices.
+            count = 0
         else:
             uid_to_host = None
             uid_to_port = None
 
         for dev in devs:
+            if issubclass(cls, FloatingDeviceMixin):
+                dev['index'] = count
+                count += 1
             servers.append(DeviceServer(dev,
                                         uid_to_host, uid_to_port,
-                                        exit_event=exit_event, count=count))
+                                        exit_event=exit_event))
             servers[-1].start()
-            count += 1
 
     # Main thread must be idle to process signals correctly, so use another
     # thread to check DeviceServers, restarting them where necessary. Define
@@ -271,8 +276,7 @@ def serve_devices(devices, exit_event=None):
                     servers.append(DeviceServer(s._device_def,
                                                 s._id_to_host,
                                                 s._id_to_port,
-                                                exit_event=exit_event,
-                                                count=s.count))
+                                                exit_event=exit_event))
 
                     try:
                         s.join(30)

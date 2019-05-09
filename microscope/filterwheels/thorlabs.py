@@ -29,7 +29,7 @@ class ThorlabsFilterWheel(FilterWheelBase):
 
     Note that the FW102C also has manual controls on the device, so clients
     should periodically query the current wheel position."""
-    def __init__(self, com, baud, timeout, **kwargs):
+    def __init__(self, com, baud, timeout, filters=[], positions=0):
         """Create ThorlabsFilterWheel
 
         :param com: COM port
@@ -37,7 +37,7 @@ class ThorlabsFilterWheel(FilterWheelBase):
         :param timeout: serial timeout
         :keyword filters: optional list of filters
         """
-        super().__init__(com, baud, timeout, **kwargs)
+        super().__init__(filters=filters, positions=positions)
         self.eol = '\r'
         # The EOL character means the serial connection must be wrapped in a
         # TextIOWrapper.

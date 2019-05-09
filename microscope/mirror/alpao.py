@@ -35,6 +35,10 @@ class AlpaoDeformableMirror(TriggerTargetMixIn, DeformableMirror):
 
     The Alpao mirrors have support for hardware triggering.  By default,
     it will be configured for software triggering, and trigger once.
+
+    Args:
+        serial_number (str): The serial number of the deformable
+            mirror, something like "BIL103".
     """
     ## The length of the buffer given to Alpao SDK to write error
     ## messages.
@@ -95,14 +99,8 @@ class AlpaoDeformableMirror(TriggerTargetMixIn, DeformableMirror):
                 raise exception_cls(msg)
 
 
-    def __init__(self, serial_number, *args, **kwargs):
-        """
-        Parameters
-        ----------
-        serial_number: string
-        The serial number of the deformable mirror, something like "BIL103".
-        """
-        super(AlpaoDeformableMirror, self).__init__(*args, **kwargs)
+    def __init__(self, serial_number):
+        super().__init__()
 
         ## We need to constantly check for errors and need a buffer to
         ## have the message written to.  To avoid creating a new buffer

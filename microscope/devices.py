@@ -72,7 +72,7 @@ DTYPES = {'int': ('int', tuple),
 _call_if_callable = lambda f: f() if callable(f) else f
 
 
-class Setting():
+class Setting:
     def __init__(self, name, dtype, get_func, set_func=None, values=None, readonly=False):
         """Create a setting.
 
@@ -164,7 +164,7 @@ def device(cls, host, port, uid=None, **kwargs):
     return dict(cls=cls, host=host, port=int(port), uid=uid, **kwargs)
 
 
-class FloatingDeviceMixin(object):
+class FloatingDeviceMixin:
     """A mixin for devices that 'float'.
 
     Some SDKs handling multiple devices do not allow for explicit
@@ -181,18 +181,17 @@ class FloatingDeviceMixin(object):
         pass
 
 
-class Device(object):
+class Device:
     """A base device class. All devices should subclass this class."""
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self):
         self.enabled = None
         # A list of settings. (Can't serialize OrderedDict, so use {}.)
         self.settings = OrderedDict()
         # We fetch a logger here, but it can't log anything until
         # a handler is attached after we've identified this device.
         self._logger = logging.getLogger(self.__class__.__name__)
-        self._index = kwargs['index'] if 'index' in kwargs else None
 
     def __del__(self):
         self.shutdown()
@@ -379,9 +378,9 @@ class DataDevice(Device):
     """
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self, buffer_length=0, **kwargs):
+    def __init__(self, buffer_length: int):
         """Derived.__init__ must call this at some point."""
-        super(DataDevice, self).__init__(**kwargs)
+        super().__init__()
         # A length-1 buffer for fetching data.
         self._data = None
         # A thread to fetch and dispatch data.
@@ -629,8 +628,8 @@ class CameraDevice(DataDevice):
     """
     ALLOWED_TRANSFORMS = [p for p in itertools.product(*3 * [range(2)])]
 
-    def __init__(self, *args, **kwargs):
-        super(CameraDevice, self).__init__(**kwargs)
+    def __init__(self, buffer_length):
+        super().__init__(buffer_length)
         # A list of readout mode descriptions.
         self._readout_modes = ['default']
         # The index of the current readout mode.
@@ -812,7 +811,7 @@ class TriggerMode(Enum):
     START = 4
 
 
-class TriggerTargetMixIn(object):
+class TriggerTargetMixIn:
     """MixIn for Device that may be the target of a hardware trigger.
 
     Subclasses must set a `_trigger_type` and `_trigger_mode` property
@@ -841,7 +840,7 @@ class TriggerTargetMixIn(object):
         pass
 
 
-class SerialDeviceMixIn(object):
+class SerialDeviceMixIn:
     """MixIn for devices that are controlled via serial.
 
     Currently handles the flushing and locking of the comms channel
@@ -853,8 +852,8 @@ class SerialDeviceMixIn(object):
     """
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self, *args, **kwargs):
-        super(SerialDeviceMixIn, self).__init__(*args, **kwargs)
+    def __init__(self):
+        super().__init__()
         ## TODO: We should probably construct the connection here but
         ##       the Serial constructor takes a lot of arguments, and
         ##       it becomes tricky to separate those from arguments to
@@ -921,7 +920,7 @@ class DeformableMirror(Device):
     __metaclass__ = abc.ABCMeta
 
     @abc.abstractmethod
-    def __init__(self, *args, **kwargs):
+    def __init__(self):
         """Constructor.
 
         Subclasses must define the following properties during
@@ -933,7 +932,7 @@ class DeformableMirror(Device):
         `_pattern_idx` are initialized to None to support the queueing
         of patterns and software triggering.
         """
-        super(DeformableMirror, self).__init__(*args, **kwargs)
+        super().__init__()
 
         self._patterns = None
         self._patterns_idx = None
@@ -1003,8 +1002,8 @@ class LaserDevice(Device):
     __metaclass__ = abc.ABCMeta
 
     @abc.abstractmethod
-    def __init__(self, *args, **kwargs):
-        super(LaserDevice, self).__init__(*args, **kwargs)
+    def __init__(self):
+        super().__init__()
         self._set_point = None
 
     @abc.abstractmethod
@@ -1061,10 +1060,16 @@ class LaserDevice(Device):
 
 
 class FilterWheelBase(Device):
+    """
+
+    Args:
+        filters (list): list of tuples, each tuple with 3 elements.
+        positions (int): total number of filters in the filterwheel.
+    """
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self, *args, filters=[], positions=0, **kwargs):
-        super(FilterWheelBase, self).__init__(*args, **kwargs)
+    def __init__(self, filters, positions):
+        super().__init__()
         if isinstance(filters, dict):
             self._filters = filters
         else:
