@@ -1199,8 +1199,8 @@ class LinkamBase(devices.Device):
 
 class LinkamMDSMixin():
     """A mixin for motor-driven stages"""
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self._mdsstatus = _MDSStatus()
 
     def _post_connect(self):
@@ -1258,7 +1258,7 @@ class LinkamMDSMixin():
         return pos
 
 
-class LinkamCMS(LinkamMDSMixin, LinkamBase, devices.FloatingDeviceMixin):
+class LinkamCMS(LinkamMDSMixin, devices.FloatingDeviceMixin, LinkamBase):
     """Linkam correlative-microscopy stage."""
     _refill_map = {'sample': 'sampleDewarFillSignal',
                    'external': 'mainDewarFillSignal'}
@@ -1295,9 +1295,9 @@ class LinkamCMS(LinkamMDSMixin, LinkamBase, devices.FloatingDeviceMixin):
             return "refilling: %s, t: %s, dt: %s" % (self.refilling, self.t, self.dt)
 
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.uid = kwargs.get('uid', '')
+    def __init__(self, uid='', **kwargs):
+        super().__init__(**kwargs)
+        self.uid = uid
         self.init_usb(self.uid)
         self._cmsstatus = _CMSStatus()
         self._cmserror = _CMSError()
