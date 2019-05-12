@@ -80,7 +80,6 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ## After Init, the camera is in freerun mode (enabled)
         self.enabled = True
         self._set_our_default_state()
-        ## XXX: we should be reading this from the camera
 
         self._sensor_shape = self._read_sensor_shape() # type: Tuple[int, int]
 
@@ -90,17 +89,43 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         self.disable()
 
 
-    def _is_open(self) -> bool:
-        ## Camera is open if it is not in closed mode, i.e., it is init
-        for info in _get_info_of_all_cameras():
-            if info.dwDeviceID == self._handle.value:
-                return info.dwInUse == 1
+    def _set_our_default_state(self) -> None:
+        self.set_trigger(microscope.devices.TriggerType.SOFTWARE,
+                         microscope.devices.TriggerMode.ONCE)
+
+        ## TODO: we don't know what colourmode should be default.  We
+        ## do need to change it because by default it's not even a
+        ## grayscale colourmode.
+
+        ## There's no function to find the supported colormodes, we
+        ## need to try and see what works.
+        for mode in (ueye.CM_MONO16, ueye.CM_MONO12, ueye.CM_MONO10,
+                     ueye.CM_MONO8):
+            status = ueye.SetColorMode(self._handle, mode)
+            if status == ueye.SUCCESS:
+                break
+            elif status == ueye.INVALID_COLOR_FORMAT:
+                continue # try next mode
+            else:
+                raise RuntimeError('failed to set color mode (error code %d)'
+                                   % status)
         else:
-            raise RuntimeError('unable to find info on our camera')
+            raise RuntimeError('no colormode of interest is supported')
 
 
     def initialize(self) -> None:
         pass # Already done in __init__
+
+
+    def __del__(self):
+        ## FIXME: we shouldn't need to do this.  But the parent
+        ## classes destructors will call disable() and then
+        ## enable(). But if __init__ failed for some reason, then
+        ## those methods will also fail, so we need to prevent those
+        ## errors.  This only works because once we have a valid
+        ## handler we set enabled to something.
+        if self.enabled is not None:
+            super().__del__()
 
 
     def _on_shutdown(self) -> None:
@@ -137,44 +162,6 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
             if status != ueye.SUCCESS:
                 raise RuntimeError('failed to enter standby')
             self.enabled = False
-
-
-    def _supports_standby(self) -> bool:
-        return ueye.CameraStatus(self._handle, ueye.STANDBY_SUPPORTED,
-                                 ueye.GET_STATUS) == ueye.TRUE
-
-
-    def _set_our_default_state(self) -> None:
-        self.set_trigger(microscope.devices.TriggerType.SOFTWARE,
-                         microscope.devices.TriggerMode.ONCE)
-
-        ## TODO: we don't know what colourmode should be default.  We
-        ## do need to change it because by default it's not even a
-        ## grayscale colourmode.
-
-        ## There's no function to find the supported colormodes, we
-        ## need to try and see what works.
-        for mode in (ueye.CM_MONO16, ueye.CM_MONO12, ueye.CM_MONO10,
-                     ueye.CM_MONO8):
-            status = ueye.SetColorMode(self._handle, mode)
-            if status == ueye.SUCCESS:
-                break
-            elif status == ueye.INVALID_COLOR_FORMAT:
-                continue # try next mode
-            else:
-                raise RuntimeError('failed to set color mode (error code %d)'
-                                   % status)
-        else:
-            raise RuntimeError('no colormode of interest is supported')
-
-
-    def _read_sensor_shape(self) -> Tuple[int, int]:
-        ## Only works when camera is enabled
-        sensor_info = ueye.SENSORINFO()
-        status = ueye.GetSensorInfo(self._handle, ctypes.byref(sensor_info))
-        if status != ueye.SUCCESS:
-            raise RuntimeError('failed to to read the sensor information')
-        return (sensor_info.nMaxWidth, sensor_info.nMaxHeight)
 
 
     def abort(self):
@@ -336,11 +323,10 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
     def acquire(self) -> np.array:
         """Acquire image (blocking call)"""
-        im_size = self.get_sensor_shape()
-
         colourmode = ueye.SetColorMode(self._handle, ueye.GET_COLOR_MODE)
         dtype = _COLOURMODE_TO_DTYPE[colourmode]
 
+        im_size = self.get_sensor_shape()
         buffer = np.empty(im_size, dtype=dtype)
         bits_per_px = buffer.itemsize * 8
         buffer_pointer = buffer.ctypes.data_as(ctypes.POINTER(ctypes.c_char))
@@ -360,16 +346,55 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
             raise RuntimeError()
         return buffer
 
+    def experiment(self):
+        ## Experimental Acquires images without blocking
+        colourmode = ueye.SetColorMode(self._handle, ueye.GET_COLOR_MODE)
+        dtype = _COLOURMODE_TO_DTYPE[colourmode]
 
-    def __del__(self):
-        ## FIXME: we shouldn't need to do this.  But the parent
-        ## classes destructors will call disable() and then
-        ## enable(). But if __init__ failed for some reason, then
-        ## those methods will also fail, so we need to prevent those
-        ## errors.  This only works because once we have a valid
-        ## handler we set enabled to something.
-        if self.enabled is not None:
-            super().__del__()
+        im_size = self.get_sensor_shape()
+        buffer = np.empty(im_size, dtype=dtype)
+        bits_per_px = buffer.itemsize * 8
+        buffer_pointer = buffer.ctypes.data_as(ctypes.POINTER(ctypes.c_char))
+        mem_id = ctypes.c_int()
+        status = ueye.SetAllocatedImageMem(self._handle, im_size[0], im_size[1],
+                                           bits_per_px, buffer_pointer, mem_id)
+        if status != ueye.SUCCESS:
+            raise RuntimeError()
+        status = ueye.SetImageMem(self._handle, buffer_pointer, mem_id)
+        if status != ueye.SUCCESS:
+            raise RuntimeError()
+        status = ueye.FreezeVideo(self._handle, ueye.DONT_WAIT)
+        if status != ueye.SUCCESS:
+            raise RuntimeError()
+        import time
+        time.sleep(1)
+        status = ueye.FreeImageMem(self._handle, buffer_pointer, mem_id)
+        if status != ueye.SUCCESS:
+            raise RuntimeError()
+        return buffer
+
+
+    def _is_open(self) -> bool:
+        ## Camera is open if it is not in closed mode, i.e., it is init
+        for info in _get_info_of_all_cameras():
+            if info.dwDeviceID == self._handle.value:
+                return info.dwInUse == 1
+        else:
+            raise RuntimeError('unable to find info on our camera')
+
+
+    def _supports_standby(self) -> bool:
+        return ueye.CameraStatus(self._handle, ueye.STANDBY_SUPPORTED,
+                                 ueye.GET_STATUS) == ueye.TRUE
+
+
+    def _read_sensor_shape(self) -> Tuple[int, int]:
+        ## Only works when camera is enabled
+        sensor_info = ueye.SENSORINFO()
+        status = ueye.GetSensorInfo(self._handle, ctypes.byref(sensor_info))
+        if status != ueye.SUCCESS:
+            raise RuntimeError('failed to to read the sensor information')
+        return (sensor_info.nMaxWidth, sensor_info.nMaxHeight)
 
 
 _FLAG_TO_HORZ_BINNING = {
