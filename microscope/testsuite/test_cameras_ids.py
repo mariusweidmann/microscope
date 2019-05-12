@@ -58,28 +58,91 @@ TRIGGER_MODES = [
 ]
 
 
+class UnexpectedUsageError(Exception):
+    """Mock was used in an invalid manner.
+
+    Mocks do not have to mock every possible behaviour, they should
+    only mock the required behaviour.  This error is raised if such
+    non mocked behaviour is requested.  For example, when passing an
+    invalid parameter functions return an error code.  However, if we
+    should never be calling the function in such incorrect manner, it
+    makes the mock simpler to simply raise this exception.  This also
+    ensures that a test case will fail.
+
+    This exception differs from `NotImplementedError` in that it is
+    raised when the reached state/behaviour is not meant to be mocked
+    at all because it is undesirable to ever reach it in the first
+    place.
+    """
+    pass
+
+
 class IDSCameraMock(microscope.testsuite.mock.CameraMock,
                     metaclass=abc.ABCMeta):
+    """Abstract Base Class for IDS camera mocks.
+
+    It is not always clear if certain limitations should be placed on
+    the camera or the SDK:
+
+    - A camera starts in closed mode.  From there, it can only go into
+      freerun mode via `is_InitCamera`.  Once in freerun mode, it can
+      change to the trigger or standby mode.  However, we place that
+      limitation on the SDK and not on the camera.  This makes it
+      easier to create a camera mock at the state we need it for
+      testing.
+
+    - The default colourmode is not yet clear to us whether it should
+      be defined on the SDK or the camera.  We are keeping it in the
+      camera.
+    """
     def __init__(self) -> None:
         self._operation_mode = OperationMode.closed # type: OperationMode
         self._trigger_mode = 0 # type: int
 
+        self._reset_settings()
+
+    @abc.abstractmethod
+    def _reset_settings(self) -> None:
+        """Set the modifiable properties"""
+        raise NotImplementedError()
+
     @property
     @abc.abstractmethod
-    def supported_trigger_modes(self) -> typing.Iterable[int]:
-        """A list of all supported modes"""
+    def supported_colourmodes(self) -> typing.Iterable[int]:
+        ## This needs to be found by iterating over all colourmodes,
+        ## and check SUCCESS in SetColorMode (hCam, Mode)
         raise NotImplementedError()
+
+    @property
+    @abc.abstractmethod
+    def default_colourmode(self) -> int:
+        ## The colourmode that is set after init the camera.
+        raise NotImplementedError()
+
+    @property
+    @abc.abstractmethod
+    def colourmode(self) -> int:
+        """colourmode used for image data, not the sensor colourmode"""
+        raise NotImplementedError()
+
+    @property
+    @abc.abstractmethod
+    def supported_trigger_modes_mask(self) -> int:
+        """The supported modes linked by logical ORs"""
+        ## Output of SetExternalTrigger(h, GET_SUPPORTED_TRIGGER_MODE)
+        raise NotImplementedError()
+
+    @property
+    def supported_trigger_modes(self) -> typing.Iterable[int]:
+        tmodes = []
+        for tmode in TRIGGER_MODES:
+            if (tmode & self.supported_trigger_modes_mask) == tmode:
+                tmodes.append(tmode)
+        return tmodes
 
     @property
     def unsupported_trigger_modes(self) -> typing.Iterable[int]:
         return set(TRIGGER_MODES) ^ set(self.supported_trigger_modes)
-
-    @property
-    def _supported_trigger_modes_mask(self) -> int:
-        mask = 0
-        for mode in self.supported_trigger_modes:
-            mask |= mode
-        return mask
 
     @property
     def trigger_mode(self) -> int:
@@ -91,6 +154,8 @@ class IDSCameraMock(microscope.testsuite.mock.CameraMock,
 
     def to_closed_mode(self) -> None:
         self._operation_mode = OperationMode.closed
+        ## XXX: not sure if this should be called by the library
+        self._reset_settings()
 
     def to_freerun_mode(self) -> None:
         self._operation_mode = OperationMode.freerun
@@ -108,12 +173,45 @@ class IDSCameraMock(microscope.testsuite.mock.CameraMock,
 
     def on_closed_mode(self) -> bool:
         return self._operation_mode == OperationMode.closed
+
     def on_freerun_mode(self) -> bool:
         return self._operation_mode == OperationMode.freerun
+
     def on_trigger_mode(self) -> bool:
         return self._operation_mode == OperationMode.trigger
+
     def on_standby_mode(self) -> bool:
         return self._operation_mode == OperationMode.standby
+
+
+def print_pixel_clock_info(handle):
+    ## This info changes for each colourmode. Need a tool to get the
+    ## info for each.
+    pixel_clock_range = (ueye.UINT * 3)()
+    status = ueye.PixelClock(handle, ueye.PIXELCLOCK_CMD.GET_RANGE,
+                             ctypes.byref(pixel_clock_range),
+                             ctypes.sizeof(pixel_clock_range))
+    if status != ueye.SUCCESS:
+        raise RuntimeError()
+    if pixel_clock_range[2] != 0:
+        raise RuntimeError('not discrete pixel clocks')
+
+    ## number of pixel clocks changes.
+    n_pixel_clocks = ueye.UINT(0)
+    status = ueye.PixelClock(handle, ueye.PIXELCLOCK_CMD.GET_NUMBER,
+                             ctypes.byref(n_pixel_clocks),
+                             ctypes.sizeof(n_pixel_clocks))
+    if status != ueye.SUCCESS:
+        raise RuntimeError()
+    print('this colourmode has %d pixel clocks' % n_pixel_clocks.value)
+
+    pixel_clocks = (ueye.UINT * n_pixel_clocks.value)()
+    status = ueye.PixelClock(handle, ueye.PIXELCLOCK_CMD.GET_LIST,
+                             ctypes.byref(pixel_clocks),
+                             ctypes.sizeof(pixel_clocks))
+    if status != ueye.SUCCESS:
+        raise RuntimeError()
+    print('this colourmode has this pixel clocks', list(pixel_clocks))
 
 
 class UI306xCP_M(IDSCameraMock):
@@ -132,13 +230,31 @@ class UI306xCP_M(IDSCameraMock):
 
         ## For SENSORINFO struct
         self.sensor_name = 'UI306xCP-M'
-        self.sensor_colourmode = 1
+        self.sensor_colourmode = 1 # IS_COLORMODE_MONOCHROME
         self.pixel_size = 5.86 # µm
 
+    def _reset_settings(self) -> None:
+        self._colourmode = self.default_colourmode
+        ## FIXME: do time properly
+        self._exposure_msec = 19.89156783
+
+    @property
+    def supports_enabling(self) -> bool:
+        return True
+
+    @property
+    def sensor_width(self) -> int:
+        return 1936
+
+    @property
+    def sensor_height(self) -> int:
+        return 1216
+
+    @property
+    def supported_colourmodes(self) -> typing.Iterable[int]:
         ## This is a monochrome camera but these RGB and other colour
-        ## modes are still supported.  Well, SetColorMode returns
-        ## success.  This is weird
-        self._supported_colourmodes = [
+        ## modes are still supported (success with SetColorMode)
+        return [
             ueye.CM_BGR10_PACKED,
             ueye.CM_BGR10_UNPACKED,
             ueye.CM_BGR12_UNPACKED,
@@ -167,50 +283,27 @@ class UI306xCP_M(IDSCameraMock):
             ueye.CM_UYVY_MONO_PACKED,
             ueye.CM_UYVY_PACKED,
         ]
-        self._colourmode = 0 # type: int
-
-        ## FIXME: do time properly
-        self._exposure_msec = 19.89156783
-
-        self._reset_settings()
-
-    def supports_enabling(self) -> bool:
-        return True
 
     @property
-    def sensor_width(self) -> int:
-        return 1936
+    def default_colourmode(self) -> int:
+        ## This is weird.  Even though this camera has a monochrome
+        ## sensor, the defaul colourmode is a colour one :/
+        return 1 # CM_BGR8_PACKED
 
     @property
-    def sensor_height(self) -> int:
-        return 1216
-
-    @property
-    def supported_trigger_modes(self) -> typing.Iterable[int]:
-        return [
-            ueye.SET_TRIGGER_SOFTWARE,
-            ueye.SET_TRIGGER_HI_LO,
-            ueye.SET_TRIGGER_LO_HI,
-        ]
-
-    @property
-    def colourmode(self):
+    def colourmode(self) -> int:
         return self._colourmode
 
     @colourmode.setter
-    def colourmode(self, new_colourmode):
-        if new_colourmode in self._supported_colourmodes:
+    def colourmode(self, new_colourmode: int) -> None:
+        if new_colourmode in self.supported_colourmodes:
             self._colourmode = new_colourmode
         else:
-            raise ValueError('not supported')
+            raise ValueError('not a supported colourmode')
 
-    def _reset_settings(self) -> None:
-        ## Default mode is colour, despite this being a monochrome camera.
-        self._colourmode = ueye.CM_BGR8_PACKED
-
-    def to_closed_mode(self) -> None:
-        super().to_closed_mode()
-        self._reset_settings()
+    @property
+    def supported_trigger_modes_mask(self) -> int:
+        return 4107
 
 
 class TestIDSCameraMock:
@@ -226,18 +319,22 @@ class TestIDSCameraMock:
     assertEqual: typing.Callable
 
     def assertToClosed(self, msg=None):
+        """Fail if camera does not change to closed mode"""
         self.camera.to_closed_mode()
         self.assertTrue(self.camera.on_closed_mode(), msg)
 
     def assertToFreerun(self, msg=None):
+        """Fail if camera does not change to freerun mode"""
         self.camera.to_freerun_mode()
         self.assertTrue(self.camera.on_freerun_mode(), msg)
 
     def assertToStandby(self, msg=None):
+        """Fail if camera does not change to standby mode"""
         self.camera.to_standby_mode()
         self.assertTrue(self.camera.on_standby_mode(), msg)
 
     def assertToTrigger(self, tmode: int, msg=None):
+        """Fail if camera does not change to specified trigger mode"""
         self.camera.to_trigger_mode(tmode)
         self.assertTrue(self.camera.on_trigger_mode(), msg)
         self.assertEqual(self.camera.trigger_mode, tmode, msg)
@@ -250,19 +347,13 @@ class TestIDSCameraMock:
         self.assertToClosed()
 
     def test_from_closed_to_standby_and_back(self):
-        ## When camera is in closed mode, the SDK only allows going to
-        ## freerun mode.  We have that limitation on our mock of the
-        ## SDK but not on the camera itself because makes it easier to
-        ## write tests that start with the camera in a specific state.
         self.assertToStandby()
         self.assertToClosed()
 
     def test_from_closed_to_trigger_and_back(self):
-        ## See other comment about testing from closed to trigger mode
         for tmode in self.camera.supported_trigger_modes:
             self.assertToTrigger(tmode)
-            break # only the first is from closed mode
-        self.assertToClosed()
+            self.assertToClosed()
 
     def test_supported_trigger_modes(self):
         for tmode in self.camera.supported_trigger_modes:
@@ -277,16 +368,20 @@ class TestIDSCameraMock:
             self.assertTrue(self.camera.on_freerun_mode())
 
     def test_getting_trigger_mode_in_other_modes(self):
-        def test_it_fails():
+        def assert_trigger_mode_getter_fails():
             with self.assertRaisesRegex(RuntimeError, 'not in trigger mode'):
                 self.camera.trigger_mode
-        test_it_fails() # in closed mode
+        self.assertToClosed()
+        assert_trigger_mode_getter_fails()
         self.assertToFreerun()
-        test_it_fails()
+        assert_trigger_mode_getter_fails()
         self.assertToStandby()
-        test_it_fails()
+        assert_trigger_mode_getter_fails()
 
 
+## Once we get mocks of different cameras, we will probably need some
+## sort of dynamic creation of TestCase.  Probably we will need our
+## own TestSuite and TestLoader.
 class TestUI306xCP_MMock(TestIDSCameraMock, unittest.TestCase):
     def setUp(self):
         self.camera = UI306xCP_M()
@@ -334,7 +429,9 @@ class MockSystem:
         return self._id_to_camera.values()
 
     def get_camera(self, device_id: int) -> IDSCameraMock:
-        ## May throw KeyError
+        """
+        Throws `KeyError` if there is no such camera.
+        """
         return self._id_to_camera[device_id]
 
     def get_device_id(self, camera: IDSCameraMock) -> int:
@@ -351,9 +448,13 @@ class MockSystem:
         self._id_to_camera[next_id] = camera
 
     def unplug_camera(self, camera: IDSCameraMock) -> None:
+        """
+        Throws `KeyError` if there is no such camera.
+        """
         self._id_to_camera.pop(self.get_device_id(camera))
 
     def get_next_available_camera(self) -> typing.Optional[IDSCameraMock]:
+        ## TODO: test if next really gives them sorted by id
         for device_id in sorted(self._id_to_camera):
             camera = self._id_to_camera[device_id]
             if camera.on_closed_mode():
@@ -362,7 +463,7 @@ class MockSystem:
 
 
 class MockLibueye(microscope.testsuite.mock.MockLib):
-    """Mocks IDS uEye API SDK, based on version 4.90."""
+    """Mocks IDS uEye API SDK version 4.90.0035"""
     def __init__(self, system: MockSystem) -> None:
         super().__init__()
         self._system = system
@@ -370,13 +471,13 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
     def is_InitCamera(self, phCam, hWnd):
         if hWnd.value is not None:
-            raise NotImplementedError('we only run in DIB mode')
+            raise UnexpectedUsageError('we only run in DIB mode')
         hCam = phCam.contents
 
         if hCam.value == 0:
             device_id = 0
         elif not (hCam.value & 0x8000):
-            raise NotImplementedError("we don't init by camera id")
+            raise UnexpectedUsageError("we don't init by camera id")
         else:
             device_id = hCam.value & (~0x8000)
 
@@ -407,7 +508,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
         if nInfo.value == ueye.STANDBY_SUPPORTED:
             if ulValue.value == ueye.GET_STATUS:
-                if camera.supports_enabling():
+                if camera.supports_enabling:
                     return ueye.TRUE
                 else:
                     ## TODO: in theory, this should return FALSE but
@@ -415,7 +516,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
                     ## it first.
                     raise NotImplementedError()
             else:
-                raise RuntimeError('for query, ulValue must be GET_STATUS')
+                raise ValueError('to query standby, value must be GET_STATUS')
 
         elif nInfo.value == ueye.STANDBY:
             if ulValue.value == ueye.FALSE:
@@ -423,14 +524,28 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
             elif ulValue.value == ueye.TRUE:
                 camera.to_standby_mode()
             else:
-                raise NotImplementedError()
+                raise ValueError('to set standby, value must be TRUE or FALSE')
         else:
-            raise NotImplementedError()
+            raise UnexpectedusageError()
         return ueye.SUCCESS
 
 
-    def is_DeviceInfo(self):
-        pass
+    def is_DeviceInfo(self, hCam, nCommand, pParam, cbSizeOfParam):
+        ## Despite using the same variable name, this function does
+        ## not actually take the camera handle.  This is probably
+        ## because is_DeviceInfo() works with cameras not yet opened.
+        if hCam.value <= ueye.USE_DEVICE_ID:
+            return 125 # IS_INVALID_PARAMETER
+
+        device_id = hCam.value & (~ ueye.USE_DEVICE_ID)
+
+        camera = self._system.get_camera(device_id)
+
+        if nCommand.value == ueye.DEVICE_INFO_CMD_GET_DEVICE_INFO:
+            ## TODO: this info we do use
+            raise NotImplementedError()
+        else:
+            raise UnexpectedUsageError('invalid DeviceInfo command')
 
 
     def is_ExitCamera(self, hCam):
@@ -539,7 +654,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
             return 1
 
         if nTriggerMode.value == ueye.GET_SUPPORTED_TRIGGER_MODE:
-            return camera._supported_trigger_modes_mask
+            return camera.supported_trigger_modes_mask
         elif nTriggerMode.value == ueye.GET_EXTERNALTRIGGER:
             if not camera.on_trigger_mode():
                 return 0
@@ -573,29 +688,40 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
             raise NotImplementedError()
 
 
+    def is_PixelClock(self, hCam, nCommand, pParam, cbSizeOfParam):
+        raise NotImplementedError()
+
+
+    def is_FreezeVideo(self, hCam, Wait):
+        raise NotImplementedError()
+
+
+    def is_SetBinning(self, hCam, mode):
+        raise NotImplementedError()
+
+
 class TestLibueyeWithoutCamera(unittest.TestCase):
-    """Test behavior when there is no camera connected."""
+    """Test behavior when there are no cameras connected."""
     def setUp(self):
         self.system = MockSystem()
-
         lib  = MockLibueye(self.system)
         libnames = ['libueye_api.so', 'ueye_api', 'ueye_api_64']
         with microscope.testsuite.mock.mocked_c_dll(lib, libnames):
             self.lib = importlib.reload(ueye)
 
-    def test_init_next_without_devices(self):
+    def test_init_next_available_without_cameras(self):
         h = ueye.HIDS(0 | ueye.USE_DEVICE_ID)
         status = self.lib.InitCamera(ctypes.byref(h), None)
         self.assertEqual(status, 3)
         self.assertEqual(h.value, 0)
 
-    def test_init_specific_without_devices(self):
+    def test_init_given_id_without_cameras(self):
         h = ueye.HIDS(1 | ueye.USE_DEVICE_ID)
         status = self.lib.InitCamera(ctypes.byref(h), None)
         self.assertEqual(status, 3)
         self.assertEqual(h.value, 0)
 
-    def test_exit(self):
+    def test_exit_without_cameras(self):
         h0 = ueye.HIDS(0)
         h1 = ueye.HIDS(1)
         self.assertEqual(self.lib.ExitCamera(h0), 1)
@@ -607,22 +733,14 @@ class TestLibueyeWithoutCamera(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(n_cameras.value, 0)
 
-    def test_set_colourmode(self):
-        status = self.lib.SetColorMode(ueye.HIDS(1), ueye.CM_MONO10)
-        self.assertEqual(status, 1)
 
-    def test_set_triggermode(self):
-        status = self.lib.SetExternalTrigger(ueye.HIDS(1),
-                                             ueye.SET_TRIGGER_SOFTWARE)
-        self.assertEqual(status, 1)
+class TestLibueyeInitCamera(unittest.TestCase):
+    """Test behaviour of is_InitCamera
 
+    In most of our tests, we want a camera plugged in and already
+    initialized as part of setUp.  In this TestCase we only have the
+    camera connected, so we can test the initialisation itself.
 
-class TestLibueyeBeforeInit(unittest.TestCase):
-    """Tests for before `InitCamera`
-
-    In the other test cases, a camera is plugged in *and* initialized
-    as part of the test case setup.  These tests only have the camera
-    connected.
     """
     def setUp(self):
         self.system = MockSystem()
@@ -639,34 +757,38 @@ class TestLibueyeBeforeInit(unittest.TestCase):
         self.assertEqual(h.value, 1)
         self.assertTrue(self.camera.on_freerun_mode())
 
-    def test_init_with_window_handle(self):
-        h = ueye.HIDS(1)
-        with self.assertRaisesRegex(NotImplementedError, 'DIB mode'):
-            self.lib.InitCamera(ctypes.byref(h), ctypes.c_void_p(1))
-
     def test_camera_closed_before_init(self):
         self.assertTrue(self.camera.on_closed_mode())
 
     def test_init_by_camera_id(self):
+        ## We never initialise a camera by its ID, so our mock should
+        ## raise an exception if we ever try to do it.
         h = ueye.HIDS(1)
-        with self.assertRaisesRegex(NotImplementedError, 'camera id'):
+        with self.assertRaisesRegex(UnexpectedUsageError, 'camera id'):
             self.lib.InitCamera(ctypes.byref(h), None)
 
+    def test_init_with_window_handle(self):
+        h = ueye.HIDS(1)
+        with self.assertRaisesRegex(UnexpectedUsageError, 'DIB mode'):
+            self.lib.InitCamera(ctypes.byref(h), ctypes.c_void_p(1))
+
     def test_init_next(self):
+        """Initialise the next available camera"""
         h = ueye.HIDS(0)
         self.assertInitWithSuccess(h)
 
     def test_init_next_by_device_id(self):
-        """Init next available works even with USE_DEVICE_ID flag"""
+        """Initialise next available camera with USE_DEVICE_ID flag"""
         h = ueye.HIDS(0 | ueye.USE_DEVICE_ID)
         self.assertInitWithSuccess(h)
 
     def test_init_specific(self):
+        """Initialise camera by device id"""
         h = ueye.HIDS(1 | ueye.USE_DEVICE_ID)
         self.assertInitWithSuccess(h)
 
     def test_exit_before_init(self):
-        """Exit before Init fails"""
+        """Fails to ExitCamera an already closed camera"""
         h = ueye.HIDS(1)
         self.assertEqual(self.lib.ExitCamera(h), 1)
         self.assertEqual(h.value, 1)
@@ -679,10 +801,12 @@ class TestLibueyeBeforeInit(unittest.TestCase):
         self.assertEqual(n_cameras.value, 1)
 
     def test_set_colourmode(self):
+        """Fails to SetColorMode a closed camera"""
         status = self.lib.SetColorMode(ueye.HIDS(1), ueye.CM_MONO10)
         self.assertEqual(status, 1)
 
     def test_set_triggermode(self):
+        """Fails to set trigger mode on a closed camera"""
         status = self.lib.SetExternalTrigger(ueye.HIDS(1),
                                              ueye.SET_TRIGGER_SOFTWARE)
         self.assertEqual(status, 1)
@@ -699,6 +823,7 @@ class TestLibueye(unittest.TestCase):
             self.lib = importlib.reload(ueye)
         self.camera = UI306xCP_M()
         self.system.plug_camera(self.camera)
+
         self.h = ueye.HIDS(1 | ueye.USE_DEVICE_ID)
         status = self.lib.InitCamera(ctypes.byref(self.h), None)
         if status != 0:
@@ -719,7 +844,7 @@ class TestLibueye(unittest.TestCase):
         self.assertEqual(self.h.value, 0)
 
         ## Calling Init twice fails because the camera is already
-        ## open, but the camera itself continues to work fine.
+        ## open, but the camera itself should continue to work.
         self.assertTrue(self.camera.on_freerun_mode())
 
     def test_exit(self):
@@ -762,14 +887,17 @@ class TestLibueye(unittest.TestCase):
                                        ueye.GET_STATUS)
         self.assertEqual(status, 1) # is supported
 
-    def test_invalid_standby_supported(self):
-        ## We made a similar error for a while and though that our
-        ## camera did not support standby mode.  What really happens
-        ## if the third argument is not GET_VALUE, is that the library
-        ## returns SUCCESS which is the same as FALSE.  On our fake
-        ## lib, we just raise an error since we should never be
-        ## triggering it.
-        with self.assertRaisesRegex(RuntimeError, 'GET_STATUS'):
+    def test_invalid_call_to_standby_supported(self):
+        """Invalid usage of STANDBY_SUPPORTED raises exception"""
+        ## To query whether the camera supports standby, is not enough
+        ## to pass STANDBY_SUPPORTED.  The third argument must also be
+        ## GET_STATUS.  If the third argument is incorrect, then
+        ## CameraStatus returns SUCCESS which is the same as FALSE.
+        ## This lead us to think that our camera did not support
+        ## standby mode for a while.  Since we should never be calling
+        ## CameraStatus in such incorrect manner, our mock raises an
+        ## Exception.
+        with self.assertRaisesRegex(ValueError, 'GET_STATUS'):
             self.lib.CameraStatus(self.h, ueye.STANDBY_SUPPORTED, ueye.TRUE)
 
     def test_get_number_of_cameras(self):
@@ -779,6 +907,7 @@ class TestLibueye(unittest.TestCase):
         self.assertEqual(n_cameras.value, 1)
 
     def test_empty_camera_list(self):
+        """GetCameraList with dwCount 0 does not fill uci member"""
         camera_list = ueye.UEYE_CAMERA_LIST()
         status = self.lib.GetCameraList(ctypes.byref(camera_list))
         self.assertEqual(status, 0)
@@ -789,6 +918,9 @@ class TestLibueye(unittest.TestCase):
         self.assertEqual(camera_list.uci[0].SerNo, b'')
 
     def test_camera_list_of_incorrect_length(self):
+        ## We should never be calling GetCameraList with a
+        ## UEYE_CAMERA_LIST of incorrect length so our mock raises an
+        ## exception if we try.
         camera_list = ueye.camera_list_type_factory(4)()
         camera_list.dwCount = 4
         with self.assertRaisesRegex(NotImplementedError, 'number of devices'):
@@ -803,7 +935,8 @@ class TestLibueye(unittest.TestCase):
         self.assertEqual(camera_list.dwCount, 1)
         self.assertEqual(camera_list.uci[0].dwDeviceID, 1)
         self.assertEqual(camera_list.uci[0].dwInUse, 1)
-        self.assertEqual(camera_list.uci[0].SerNo, b'4103350857')
+        self.assertEqual(camera_list.uci[0].SerNo.decode(),
+                         self.camera.serial_number)
 
     def test_get_standby_camera_list(self):
         """Standby cameras count as cameras in use"""
@@ -825,14 +958,18 @@ class TestLibueye(unittest.TestCase):
         sensor_info = ueye.SENSORINFO()
         status = self.lib.GetSensorInfo(self.h, ctypes.byref(sensor_info))
         self.assertEqual(status, 0)
-        for attr, val in [('nMaxWidth', self.camera.sensor_width),
-                          ('nMaxHeight', self.camera.sensor_height),
-                          ('nColorMode', chr(self.camera.sensor_colourmode).encode()),]:
-            self.assertEqual(getattr(sensor_info, attr), val)
+        self.assertEqual(sensor_info.nMaxWidth, self.camera.sensor_width)
+        self.assertEqual(sensor_info.nMaxHeight, self.camera.sensor_height)
+        self.assertEqual(sensor_info.nColorMode,
+                         chr(self.camera.sensor_colourmode).encode())
 
     def test_set_colourmode(self):
         self.assertSuccess(self.lib.SetColorMode(self.h, ueye.CM_MONO16))
         self.assertEqual(self.camera.colourmode, ueye.CM_MONO16)
+
+    def test_set_colourmode_invalid_id(self):
+        status = self.lib.SetColorMode(ueye.HIDS(9), ueye.CM_MONO10)
+        self.assertEqual(status, 1)
 
     def test_get_colourmode(self):
         self.assertEqual(self.lib.SetColorMode(self.h, ueye.GET_COLOR_MODE),
@@ -866,6 +1003,11 @@ class TestLibueye(unittest.TestCase):
         self.assertSuccess(status)
         self.assertTrue(self.camera.on_trigger_mode())
         self.assertEqual(self.camera.trigger_mode, ueye.SET_TRIGGER_SOFTWARE)
+
+    def test_set_triggermode_invalid_id(self):
+        status = self.lib.SetExternalTrigger(ueye.HIDS(9),
+                                             ueye.SET_TRIGGER_SOFTWARE)
+        self.assertEqual(status, 1)
 
     def test_get_supported_trigger_modes(self):
         modes = self.lib.SetExternalTrigger(self.h,
@@ -945,6 +1087,9 @@ class TestUI306xCP_M(unittest.TestCase,
         self.fake = UI306xCP_M()
         system.plug_camera(self.fake)
         self.device = microscope.cameras.ids.IDSuEye()
+
+    def tearDown(self):
+        self.device.shutdown()
 
 
 if __name__ == '__main__':

@@ -30,6 +30,7 @@ class DeviceMock(metaclass=abc.ABCMeta):
     specific hardware such as `LaserMock`, `CameraMock`, etc.
 
     """
+    @property
     @abc.abstractmethod
     def supports_enabling(self) -> bool:
         """Whether this device can be enabled/disabled.

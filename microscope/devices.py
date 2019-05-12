@@ -840,7 +840,7 @@ class TriggerTargetMixIn(object):
         return self._trigger_type
 
     @abc.abstractmethod
-    def set_trigger(self, ttype, tmode):
+    def set_trigger(self, ttype: TriggerType, tmode: TriggerMode):
         """Set device for a specific trigger.
         """
         pass
@@ -1069,6 +1069,7 @@ class FilterWheelBase(Device):
     __metaclass__ = abc.ABCMeta
 
     def __init__(self, *args, filters=[], positions=0, **kwargs):
+        print('filters are', filters)
         super(FilterWheelBase, self).__init__(*args, **kwargs)
         if isinstance(filters, dict):
             self._filters = filters

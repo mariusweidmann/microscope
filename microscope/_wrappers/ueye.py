@@ -55,6 +55,7 @@ _SDK = ctypes.CDLL(_libname)
 NO_SUCCESS = -1
 SUCCESS = 0
 INVALID_CAMERA_HANDLE = 1
+IS_IO_REQUEST_FAILED = 2 # an io request to the driver failed
 CANT_OPEN_DEVICE = 3 # returned by is_InitCamera
 INVALID_MODE = 101
 INVALID_PARAMETER = 125
@@ -62,6 +63,14 @@ INVALID_COLOR_FORMAT = 174
 
 ## Device enumeration
 USE_DEVICE_ID = 0x8000
+
+## live/freeze parameters
+GET_LIVE = 0x8000
+WAIT = 0x0001
+DONT_WAIT = 0x0000
+FORCE_VIDEO_STOP = 0x4000
+FORCE_VIDEO_START = 0x4000
+USE_NEXT_MEM = 0x8000
 
 
 ## Trigger modes
@@ -326,19 +335,24 @@ def prototype(name, argtypes, restype=IDSEXP):
     return func
 
 
-GetNumberOfCameras = prototype('is_GetNumberOfCameras', [ctypes.POINTER(INT)])
-GetCameraList = prototype('is_GetCameraList', [PUEYE_CAMERA_LIST])
-DeviceInfo = prototype('is_DeviceInfo', [HIDS, UINT, ctypes.c_void_p, UINT])
+SetColorMode = prototype('is_SetColorMode', [HIDS, INT])
+
+FreezeVideo = prototype('is_FreezeVideo', [HIDS, INT])
+
+SetExternalTrigger = prototype('is_SetExternalTrigger', [HIDS, INT])
 
 InitCamera = prototype('is_InitCamera', [ctypes.POINTER(HIDS), HWND])
 ExitCamera = prototype('is_ExitCamera', [HIDS])
+CameraStatus = prototype('is_CameraStatus', [HIDS, INT, ULONG], IDSEXPUL)
+GetNumberOfCameras = prototype('is_GetNumberOfCameras', [ctypes.POINTER(INT)])
+
 GetSensorInfo = prototype('is_GetSensorInfo', [HIDS, PSENSORINFO])
 
-CameraStatus = prototype('is_CameraStatus', [HIDS, INT, ULONG], IDSEXPUL)
+SetBinning = prototype('is_SetBinning', [HIDS, INT])
 
-SetColorMode = prototype('is_SetColorMode', [HIDS, INT])
+GetCameraList = prototype('is_GetCameraList', [PUEYE_CAMERA_LIST])
 
-SetExternalTrigger = prototype('is_SetExternalTrigger', [HIDS, INT])
+DeviceInfo = prototype('is_DeviceInfo', [HIDS, UINT, ctypes.c_void_p, UINT])
 
 
 class EXPOSURE_CMD(enum.IntEnum):
@@ -366,3 +380,14 @@ class EXPOSURE_CMD(enum.IntEnum):
     SET_DUAL_EXPOSURE_RATIO = 22
 
 Exposure = prototype('is_Exposure', [HIDS, UINT, ctypes.c_void_p, UINT])
+
+
+class PIXELCLOCK_CMD(enum.IntEnum):
+    GET_NUMBER = 1
+    GET_LIST = 2
+    GET_RANGE = 3
+    GET_DEFAULT = 4
+    GET = 5
+    SET = 6
+
+PixelClock = prototype('is_PixelClock', [HIDS, UINT, ctypes.c_void_p, UINT])
