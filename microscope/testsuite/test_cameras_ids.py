@@ -19,7 +19,9 @@
 import abc
 import ctypes
 import enum
+import functools
 import importlib
+import operator
 import typing
 import unittest
 import unittest.mock
@@ -143,6 +145,24 @@ class IDSCameraMock(microscope.testsuite.mock.CameraMock,
     @property
     def unsupported_trigger_modes(self) -> typing.Iterable[int]:
         return set(TRIGGER_MODES) ^ set(self.supported_trigger_modes)
+
+    @property
+    @abc.abstractmethod
+    def supported_horizontal_binnings(self) -> typing.Iterable[int]:
+        """List of flags"""
+        raise NotImplementedError()
+
+    @property
+    @abc.abstractmethod
+    def supported_vertical_binnings(self) -> typing.Iterable[int]:
+        """List of flags"""
+        raise NotImplementedError()
+
+    @property
+    def supported_binnings_mask(self) -> int:
+        return functools.reduce(operator.or_,
+                                (self.supported_vertical_binnings
+                                 + self.supported_horizontal_binnings))
 
     @property
     def trigger_mode(self) -> int:
@@ -304,6 +324,14 @@ class UI306xCP_M(IDSCameraMock):
     @property
     def supported_trigger_modes_mask(self) -> int:
         return 4107
+
+    @property
+    def supported_horizontal_binnings(self) -> typing.Iterable[int]:
+        return []
+
+    @property
+    def supported_vertical_binnings(self) -> typing.Iterable[int]:
+        return []
 
 
 class TestIDSCameraMock:
@@ -697,7 +725,14 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
 
     def is_SetBinning(self, hCam, mode):
-        raise NotImplementedError()
+        camera = self._system.get_camera(hCam.value)
+
+        if mode.value = ueye.GET_SUPPORTED_BINNING:
+            return camera.supported_binnings_mask
+        elif mode.value = ueye.GET_BINNING:
+            raise NotImplementedError()
+        else:
+            raise NotImplementedError()
 
     def is_SetImageMem(self, hCam, pcMem, pid):
         raise NotImplementedError()
