@@ -699,6 +699,16 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
     def is_SetBinning(self, hCam, mode):
         raise NotImplementedError()
 
+    def is_SetImageMem(self, hCam, pcMem, pid):
+        raise NotImplementedError()
+
+    def is_SetAllocatedImageMem(self, hCam, width, height, bitspixel, pcImgMem,
+                                pid):
+        raise NotImplementedError()
+
+    def is_FreeImageMem(self, hCam, pcMem, pid):
+        raise NotImplementedError()
+
 
 class TestLibueyeWithoutCamera(unittest.TestCase):
     """Test behavior when there are no cameras connected."""
@@ -921,7 +931,7 @@ class TestLibueye(unittest.TestCase):
         ## We should never be calling GetCameraList with a
         ## UEYE_CAMERA_LIST of incorrect length so our mock raises an
         ## exception if we try.
-        camera_list = ueye.camera_list_type_factory(4)()
+        camera_list = ueye.camera_list_factory(4)
         camera_list.dwCount = 4
         with self.assertRaisesRegex(NotImplementedError, 'number of devices'):
             self.lib.GetCameraList(ctypes.cast(ctypes.byref(camera_list),

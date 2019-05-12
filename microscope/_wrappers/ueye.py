@@ -20,13 +20,17 @@
 
 """Wrapper to libueye.
 
-There is pyueye which also provides a ctypes wrapper to libueye.
-However, it's undocumented so we always need to go back to the C
-documentation.  But pyueye already has its own magic so we also need
-to read its source.
+There is the Python package pyueye which provides a ctypes wrapper to
+libueye.  However, it's undocumented so we always need to go back to
+the C documentation to know how to use it.  In addition, pyueye has
+its own Python magic so we also need to read its source.  So we have
+our own.  Our is also undocumented but has the minimum of Python magic
+so reading the C documentation should be enough.
 
-Function names and enums are the same as in the C library, except the
-``is_`` and ``IS_`` prefix which got removed.
+Function and macro constants names are the same as in the C library,
+except the ``is_`` and ``IS_`` prefix which got removed.  In addition,
+C enums form Python enums and the member names do not include the enum
+name.
 
 """
 
@@ -58,6 +62,7 @@ INVALID_CAMERA_HANDLE = 1
 IS_IO_REQUEST_FAILED = 2 # an io request to the driver failed
 CANT_OPEN_DEVICE = 3 # returned by is_InitCamera
 INVALID_MODE = 101
+NO_ACTIVE_IMG_MEM = 108
 INVALID_PARAMETER = 125
 INVALID_COLOR_FORMAT = 174
 
@@ -202,11 +207,47 @@ STANDBY = 24
 STANDBY_SUPPORTED = 25
 
 
-## Enum of commands for DeviceInfo
 DEVICE_INFO_CMD_GET_DEVICE_INFO = 0x02010001
 
+class EXPOSURE_CMD(enum.IntEnum):
+    GET_CAPS = 1
+    GET_EXPOSURE_DEFAULT = 2
+    GET_EXPOSURE_RANGE_MIN = 3
+    GET_EXPOSURE_RANGE_MAX = 4
+    GET_EXPOSURE_RANGE_INC = 5
+    GET_EXPOSURE_RANGE = 6
+    GET_EXPOSURE = 7
+    GET_FINE_INCREMENT_RANGE_MIN = 8
+    GET_FINE_INCREMENT_RANGE_MAX = 9
+    GET_FINE_INCREMENT_RANGE_INC = 10
+    GET_FINE_INCREMENT_RANGE = 11
+    SET_EXPOSURE = 12
+    GET_LONG_EXPOSURE_RANGE_MIN = 13
+    GET_LONG_EXPOSURE_RANGE_MAX = 14
+    GET_LONG_EXPOSURE_RANGE_INC = 15
+    GET_LONG_EXPOSURE_RANGE = 16
+    GET_LONG_EXPOSURE_ENABLE = 17
+    SET_LONG_EXPOSURE_ENABLE = 18
+    GET_DUAL_EXPOSURE_RATIO_DEFAULT = 19
+    GET_DUAL_EXPOSURE_RATIO_RANGE = 20
+    GET_DUAL_EXPOSURE_RATIO = 21
+    SET_DUAL_EXPOSURE_RATIO = 22
 
-## typedefs so our code can read like the ueye header
+
+class PIXELCLOCK_CMD(enum.IntEnum):
+    GET_NUMBER = 1
+    GET_LIST = 2
+    GET_RANGE = 3
+    GET_DEFAULT = 4
+    GET = 5
+    SET = 6
+
+
+TRUE = 1
+FALSE = 0
+
+
+## typedefs so our prototype calls can read, just like the ueye header
 BOOL = ctypes.c_int32
 BYTE = ctypes.c_ubyte
 DWORD = ctypes.c_uint32
@@ -221,10 +262,6 @@ CHAR = ctypes.c_char
 HIDS = DWORD
 IDSEXP = INT
 IDSEXPUL = ULONG
-
-TRUE = 1
-FALSE = 0
-
 
 
 class SENSORINFO(ctypes.Structure):
@@ -266,24 +303,7 @@ class UEYE_CAMERA_INFO(ctypes.Structure):
 PUEYE_CAMERA_INFO = ctypes.POINTER(UEYE_CAMERA_INFO)
 
 
-def camera_list_type_factory(n_cameras: int):
-    """List of camera informations.
-
-    This struct makes use of the `struct array hack
-    <http://www.c-faq.com/struct/structhack.html>`_ for the info of
-    multiple cameras.  We want to use as little magic here as possible
-    so that we can just use the C documentation, but this hack does
-    not work `unchanged in Python
-    <https://stackoverflow.com/questions/51549340/python-ctypes-definition-with-c-struct-arrary>`_.
-    The reason is that the array type in Python includes the array
-    length.  So use this instead::
-
-        camera_list = ueye.camera_list_type_factory(n_cameras)()
-        camera_list.dwCount = n_cameras
-        GetCameraList(ctypes.cast(ctypes.byref(camera_list),
-                                  ueye.PUEYE_CAMERA_LIST))
-
-    """
+def _camera_list_type_factory(n_cameras: int):
     class _UEYE_CAMERA_LIST(ctypes.Structure):
         _pack_ = 8
         _fields_ = [
@@ -292,7 +312,27 @@ def camera_list_type_factory(n_cameras: int):
         ]
     return _UEYE_CAMERA_LIST
 
-UEYE_CAMERA_LIST = camera_list_type_factory(1)
+def camera_list_factory(n_cameras: int):
+    """List of camera informations.
+
+    The `is_GetCameraList` function makes use of the `struct array
+    hack <http://www.c-faq.com/struct/structhack.html>`_ for the info
+    of multiple cameras.  We want to use as little magic as possible
+    in our wrapper so that we can just use the C documentation, but
+    this hack does not work `unchanged in Python
+    <https://stackoverflow.com/questions/51549340/python-ctypes-definition-with-c-struct-arrary>`_.
+    The reason is that the array type in Python includes the array
+    length which Python does check.  So use this instead::
+
+        camera_list = ueye.camera_list_type_factory(n_cameras)()
+        camera_list.dwCount = n_cameras
+        GetCameraList(ctypes.cast(ctypes.byref(camera_list),
+                                  ueye.PUEYE_CAMERA_LIST))
+
+    """
+    return _camera_list_type_factory(n_cameras)()
+
+UEYE_CAMERA_LIST = _camera_list_type_factory(1)
 PUEYE_CAMERA_LIST = ctypes.POINTER(UEYE_CAMERA_LIST)
 
 
@@ -335,59 +375,39 @@ def prototype(name, argtypes, restype=IDSEXP):
     return func
 
 
-SetColorMode = prototype('is_SetColorMode', [HIDS, INT])
+CameraStatus = prototype('is_CameraStatus', [HIDS, INT, ULONG], IDSEXPUL)
+
+DeviceInfo = prototype('is_DeviceInfo', [HIDS, UINT, ctypes.c_void_p, UINT])
+
+ExitCamera = prototype('is_ExitCamera', [HIDS])
+
+Exposure = prototype('is_Exposure', [HIDS, UINT, ctypes.c_void_p, UINT])
+
+FreeImageMem = prototype('is_FreeImageMem',
+                         [HIDS, ctypes.POINTER(ctypes.c_char), ctypes.c_int])
 
 FreezeVideo = prototype('is_FreezeVideo', [HIDS, INT])
 
-SetExternalTrigger = prototype('is_SetExternalTrigger', [HIDS, INT])
+GetCameraList = prototype('is_GetCameraList', [PUEYE_CAMERA_LIST])
 
-InitCamera = prototype('is_InitCamera', [ctypes.POINTER(HIDS), HWND])
-ExitCamera = prototype('is_ExitCamera', [HIDS])
-CameraStatus = prototype('is_CameraStatus', [HIDS, INT, ULONG], IDSEXPUL)
 GetNumberOfCameras = prototype('is_GetNumberOfCameras', [ctypes.POINTER(INT)])
 
 GetSensorInfo = prototype('is_GetSensorInfo', [HIDS, PSENSORINFO])
 
-SetBinning = prototype('is_SetBinning', [HIDS, INT])
-
-GetCameraList = prototype('is_GetCameraList', [PUEYE_CAMERA_LIST])
-
-DeviceInfo = prototype('is_DeviceInfo', [HIDS, UINT, ctypes.c_void_p, UINT])
-
-
-class EXPOSURE_CMD(enum.IntEnum):
-    GET_CAPS = 1
-    GET_EXPOSURE_DEFAULT = 2
-    GET_EXPOSURE_RANGE_MIN = 3
-    GET_EXPOSURE_RANGE_MAX = 4
-    GET_EXPOSURE_RANGE_INC = 5
-    GET_EXPOSURE_RANGE = 6
-    GET_EXPOSURE = 7
-    GET_FINE_INCREMENT_RANGE_MIN = 8
-    GET_FINE_INCREMENT_RANGE_MAX = 9
-    GET_FINE_INCREMENT_RANGE_INC = 10
-    GET_FINE_INCREMENT_RANGE = 11
-    SET_EXPOSURE = 12
-    GET_LONG_EXPOSURE_RANGE_MIN = 13
-    GET_LONG_EXPOSURE_RANGE_MAX = 14
-    GET_LONG_EXPOSURE_RANGE_INC = 15
-    GET_LONG_EXPOSURE_RANGE = 16
-    GET_LONG_EXPOSURE_ENABLE = 17
-    SET_LONG_EXPOSURE_ENABLE = 18
-    GET_DUAL_EXPOSURE_RATIO_DEFAULT = 19
-    GET_DUAL_EXPOSURE_RATIO_RANGE = 20
-    GET_DUAL_EXPOSURE_RATIO = 21
-    SET_DUAL_EXPOSURE_RATIO = 22
-
-Exposure = prototype('is_Exposure', [HIDS, UINT, ctypes.c_void_p, UINT])
-
-
-class PIXELCLOCK_CMD(enum.IntEnum):
-    GET_NUMBER = 1
-    GET_LIST = 2
-    GET_RANGE = 3
-    GET_DEFAULT = 4
-    GET = 5
-    SET = 6
+InitCamera = prototype('is_InitCamera', [ctypes.POINTER(HIDS), HWND])
 
 PixelClock = prototype('is_PixelClock', [HIDS, UINT, ctypes.c_void_p, UINT])
+
+SetAllocatedImageMem = prototype('is_SetAllocatedImageMem',
+                                 [HIDS, INT, INT, INT,
+                                  ctypes.POINTER(ctypes.c_char),
+                                  ctypes.POINTER(ctypes.c_int)])
+
+SetBinning = prototype('is_SetBinning', [HIDS, INT])
+
+SetColorMode = prototype('is_SetColorMode', [HIDS, INT])
+
+SetExternalTrigger = prototype('is_SetExternalTrigger', [HIDS, INT])
+
+SetImageMem = prototype('is_SetImageMem',
+                        [HIDS, ctypes.POINTER(ctypes.c_char), ctypes.c_int])

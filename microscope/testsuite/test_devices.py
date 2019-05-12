@@ -436,6 +436,8 @@ class TestDummyCamera(unittest.TestCase, CameraTests):
     def setUp(self):
         self.device = dummies.TestCamera()
 
+    def test_get_sensor_shape(self):
+        pass
 
 class TestEmptyDummyFilterWheel(unittest.TestCase, FilterWheelTests):
     def setUp(self):
