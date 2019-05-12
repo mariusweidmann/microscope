@@ -860,8 +860,8 @@ class SerialDeviceMixIn:
     """
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         ## FIXME: with the recent changes to how constructor arguments
         ## are passed to the parent class, this should now be easy.
         ## TODO: We should probably construct the connection here but
