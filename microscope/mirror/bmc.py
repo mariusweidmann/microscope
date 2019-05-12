@@ -37,8 +37,8 @@ class BMCDeformableMirror(DeformableMirror):
             mirror.
     """
 
-    def __init__(self, serial_number):
-        super().__init__()
+    def __init__(self, serial_number, **kwargs):
+        super().__init__(**kwargs)
         self._dm = BMC.DM()
 
         if __debug__:

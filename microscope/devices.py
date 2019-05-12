@@ -175,6 +175,10 @@ class FloatingDeviceMixin:
     """
     __metaclass__ = abc.ABCMeta
 
+    def __init__(self, index=0, **kwargs):
+        super().__init__(**kwargs)
+        self._index = index
+
     @abc.abstractmethod
     def get_id(self):
         """Return a unique hardware identifier, such as a serial number."""
@@ -378,9 +382,9 @@ class DataDevice(Device):
     """
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self, buffer_length: int):
+    def __init__(self, buffer_length: int = 0, **kwargs):
         """Derived.__init__ must call this at some point."""
-        super().__init__()
+        super().__init__(**kwargs)
         # A length-1 buffer for fetching data.
         self._data = None
         # A thread to fetch and dispatch data.
@@ -628,8 +632,8 @@ class CameraDevice(DataDevice):
     """
     ALLOWED_TRANSFORMS = [p for p in itertools.product(*3 * [range(2)])]
 
-    def __init__(self, buffer_length):
-        super().__init__(buffer_length)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         # A list of readout mode descriptions.
         self._readout_modes = ['default']
         # The index of the current readout mode.
@@ -854,10 +858,12 @@ class SerialDeviceMixIn:
 
     def __init__(self):
         super().__init__()
+        ## FIXME: with the recent changes to how constructor arguments
+        ## are passed to the parent class, this should now be easy.
         ## TODO: We should probably construct the connection here but
-        ##       the Serial constructor takes a lot of arguments, and
-        ##       it becomes tricky to separate those from arguments to
-        ##       the constructor of other parent classes.
+        ## the Serial constructor takes a lot of arguments, and it
+        ## becomes tricky to separate those from arguments to the
+        ## constructor of other parent classes.
         self.connection = None # serial.Serial (to be constructed by child)
         self._comms_lock = threading.RLock()
 
@@ -920,7 +926,7 @@ class DeformableMirror(Device):
     __metaclass__ = abc.ABCMeta
 
     @abc.abstractmethod
-    def __init__(self):
+    def __init__(self, **kwargs):
         """Constructor.
 
         Subclasses must define the following properties during
@@ -932,7 +938,7 @@ class DeformableMirror(Device):
         `_pattern_idx` are initialized to None to support the queueing
         of patterns and software triggering.
         """
-        super().__init__()
+        super().__init__(**kwargs)
 
         self._patterns = None
         self._patterns_idx = None
@@ -1002,8 +1008,8 @@ class LaserDevice(Device):
     __metaclass__ = abc.ABCMeta
 
     @abc.abstractmethod
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self._set_point = None
 
     @abc.abstractmethod
@@ -1068,8 +1074,8 @@ class FilterWheelBase(Device):
     """
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self, filters, positions):
-        super().__init__()
+    def __init__(self, filters=[], positions=0, **kwargs):
+        super().__init__(**kwargs)
         if isinstance(filters, dict):
             self._filters = filters
         else:

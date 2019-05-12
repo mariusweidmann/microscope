@@ -99,8 +99,8 @@ class AlpaoDeformableMirror(TriggerTargetMixIn, DeformableMirror):
                 raise exception_cls(msg)
 
 
-    def __init__(self, serial_number):
-        super().__init__()
+    def __init__(self, serial_number, **kwargs):
+        super().__init__(**kwargs)
 
         ## We need to constantly check for errors and need a buffer to
         ## have the message written to.  To avoid creating a new buffer
