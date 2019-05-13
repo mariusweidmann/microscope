@@ -415,86 +415,170 @@ class TestUI306xCP_MMock(TestIDSCameraMock, unittest.TestCase):
         self.camera = UI306xCP_M()
 
 
-class MockSystem:
-    """Mock system where cameras are plugged and unplugged from.
+class MockUeyeusbd:
+    """Mock ueyeusbd which assigns device IDs to the cameras.
 
-    We are doing the device id assignment here on the system instead
-    of the device.  I'm not sure what is more representative of
-    reality.  At least this keeps the methods to plug/unplug cameras
-    out of the lib.
-
-    We need to check how it actually works if there is more than one
-    device around.  The device ID is used all over the library but
-    it's not persistent.  If they are given by order that they are
-    connected, and IDs are reused, then unplugging a camera and
-    plugging another will cause issues.  Right?
-
-    .. todo::
-
-       Confirm that device IDs are given by increasing order.  Restart
-       system.  Plug device A and check its device ID.  We expect it
-       to be 1.  Plug device B and check its device ID.  We expect it
-       to be 2.
-
-    .. todo::
-
-       Check what happens when devices are plugged in and out.  Plug
-        device A and check its device ID is 1.  Unplug device A.
-        Plug device B and check it's device ID is 2 (or at least not
-        1).  Plug device A again and check whether its device ID is
-        the same as before.
-
+    ueyeusbd daemon runs in background and handles the connecting and
+    unconnecting of the IDS USB cameras.  It is mainly responsible for
+    keeping track of device IDs and list connected cameras.
     """
     def __init__(self) -> None:
-        self._id_to_camera = {} # type: typing.Dict[int, IDSCameraMock]
+        ## We need to keep track of previously connected cameras and
+        ## the device IDs they got assigned.  This is because if a
+        ## camera is unplugged and plugged back it should be given the
+        ## same ID as the last time.
+        self._connected_cameras = [] # type: MutableSequence[IDSCameraMock]
+        self._camera_to_id = {} # type: Mapping[IDSCameraMock, int]
 
     @property
     def n_cameras(self) -> int:
-        return len(self._id_to_camera)
+        return len(self._connected_cameras)
 
     @property
     def cameras(self) -> typing.Iterable[IDSCameraMock]:
-        return self._id_to_camera.values()
+        """List of connected cameras, ordered for `GetCameraList`.
 
-    def get_camera(self, device_id: int) -> IDSCameraMock:
+        The cameras are sorted by when they were connected the last
+        time.  This order is used by `GetCameraList` and is different
+        from the order used by `InitCamera(0, NULL)` (next available
+        camera is always by device ID).
         """
-        Throws `KeyError` if there is no such camera.
-        """
-        return self._id_to_camera[device_id]
+        return self._connected_cameras.copy()
 
     def get_device_id(self, camera: IDSCameraMock) -> int:
-        device_ids = [i for i, c in self._id_to_camera.items() if c is camera]
-        assert len(device_ids) == 1, 'somehow we broke internal dict'
-        return device_ids[0]
+        if camera not in self._connected_cameras:
+            raise ValueError('no such connected camera')
+        return self._camera_to_id[camera]
+
+    def get_camera(self, device_id: int) -> IDSCameraMock:
+        cameras = [c for c, i in self._camera_to_id.items() if i is device_id]
+        assert len(cameras) <= 1, 'somehow we broke internal dict'
+        camera = cameras[0] # raises IndexError if empty
+        if camera not in self._connected_cameras:
+            raise ValueError('no connected camera with device ID %s'
+                             % device_id)
+        return camera
 
     def plug_camera(self, camera: IDSCameraMock) -> None:
-        ## TODO: this assumes that connecting camera A gets ID 1, then
-        ## connecting camera B gets ID 2, unconnecting camera A frees
-        ## ID 1.  Reconnecting camera A again will use ID 3.  Is this
-        ## true?
-        next_id = 1 + max(self._id_to_camera.keys(), default=0)
-        self._id_to_camera[next_id] = camera
+        if camera in self._connected_cameras:
+            raise UnexpectedUsageError('camera already connected')
+
+        if camera not in self._camera_to_id:
+            ## Assign new ID, if being connected for the first time.
+            next_id = 1 + max(self._camera_to_id.values(), default=0)
+            self._camera_to_id[camera] = next_id
+        self._connected_cameras.append(camera)
 
     def unplug_camera(self, camera: IDSCameraMock) -> None:
-        """
-        Throws `KeyError` if there is no such camera.
-        """
-        self._id_to_camera.pop(self.get_device_id(camera))
+        self._connected_cameras.remove(camera)
 
     def get_next_available_camera(self) -> typing.Optional[IDSCameraMock]:
-        ## TODO: test if next really gives them sorted by id
-        for device_id in sorted(self._id_to_camera):
-            camera = self._id_to_camera[device_id]
+        """Next available camera, ordered for `InitCamera(0, NULL)`"""
+        for camera in sorted(self._connected_cameras, key=self.get_device_id):
             if camera.on_closed_mode():
                 return camera
         return None # there is no available camera
 
 
+class TestUeyeusbdWithOneCam(unittest.TestCase):
+    def setUp(self):
+        self.daemon = MockUeyeusbd()
+
+    def test_no_connections(self):
+        self.assertEqual(self.daemon.n_cameras, 0)
+        self.assertSequenceEqual(self.daemon.cameras, [])
+        self.assertEqual(self.daemon.get_next_available_camera(), None)
+
+    def test_connecting_single_camera(self):
+        camera = UI306xCP_M()
+        self.daemon.plug_camera(camera)
+        self.assertSequenceEqual(self.daemon.cameras, [camera])
+        self.assertEqual(self.daemon.n_cameras, 1)
+        self.assertEqual(self.daemon.get_camera(1), camera)
+        self.assertEqual(self.daemon.get_device_id(camera), 1)
+
+    def test_get_next_available_without_closed_cams(self):
+        camera = UI306xCP_M()
+        self.daemon.plug_camera(camera)
+        self.assertEqual(self.daemon.get_next_available_camera(), camera)
+        self.assertEqual(self.daemon.get_next_available_camera(), camera)
+        camera.to_freerun_mode()
+        self.assertEqual(self.daemon.get_next_available_camera(), None)
+
+    def test_unconnected_camera(self):
+        camera = UI306xCP_M()
+        self.daemon.plug_camera(camera)
+        self.daemon.unplug_camera(camera)
+        self.assertEqual(self.daemon.n_cameras, 0)
+        with self.assertRaisesRegex(ValueError, 'no such connected camera'):
+            self.daemon.get_device_id(camera)
+        with self.assertRaisesRegex(ValueError, 'no connected camera'):
+            self.daemon.get_camera(1)
+
+
+class TestUeyeusbdWithMultipleCams(unittest.TestCase):
+    def setUp(self):
+        self.daemon = MockUeyeusbd()
+        self.cam1 = UI306xCP_M()
+        self.cam1.serial_number = '4103350857'
+        self.cam2 = UI306xCP_M()
+        self.cam2.serial_number = '4103469488'
+        self.cam3 = UI306xCP_M()
+        self.cam3.serial_number = '4103211500'
+        for camera in (self.cam1, self.cam2, self.cam3,):
+            self.daemon.plug_camera(camera)
+
+    def test_given_device_ids_order(self):
+        """Device ids are given by connection order"""
+        self.assertEqual(self.daemon.get_device_id(self.cam1), 1)
+        self.assertEqual(self.daemon.get_device_id(self.cam2), 2)
+        self.assertEqual(self.daemon.get_device_id(self.cam3), 3)
+
+    def test_memory_of_device_ids(self):
+        """Devices keep their device IDs after unplug/replug"""
+        self.daemon.unplug_camera(self.cam1)
+        self.daemon.plug_camera(self.cam1)
+        self.assertEqual(self.daemon.get_device_id(self.cam1), 1)
+
+    def test_cameras_order(self):
+        """cameras attribute is sorted by last time they were plugged"""
+        self.assertSequenceEqual(self.daemon.cameras,
+                                 [self.cam1, self.cam2, self.cam3])
+
+        self.daemon.unplug_camera(self.cam1)
+        self.assertSequenceEqual(self.daemon.cameras,
+                                 [self.cam2, self.cam3])
+
+        self.daemon.plug_camera(self.cam1)
+        self.assertSequenceEqual(self.daemon.cameras,
+                                 [self.cam2, self.cam3, self.cam1])
+
+        self.daemon.unplug_camera(self.cam3)
+        self.daemon.plug_camera(self.cam3)
+        self.assertSequenceEqual(self.daemon.cameras,
+                                 [self.cam2, self.cam1, self.cam3])
+
+    def test_order_of_next_available(self):
+        """next available camera is by device ID order"""
+        self.assertEqual(self.daemon.get_next_available_camera(), self.cam1)
+        self.cam1.to_freerun_mode()
+        self.assertEqual(self.daemon.get_next_available_camera(), self.cam2)
+        self.cam1.to_closed_mode()
+        self.assertEqual(self.daemon.get_next_available_camera(), self.cam1)
+        ## Even after unplug/replug, since the device IDs are kept the
+        ## same, the next available camera is still the lowest device ID.
+        self.daemon.unplug_camera(self.cam1)
+        self.daemon.unplug_camera(self.cam3)
+        self.daemon.plug_camera(self.cam3)
+        self.daemon.plug_camera(self.cam1)
+        self.assertEqual(self.daemon.get_next_available_camera(), self.cam1)
+
+
 class MockLibueye(microscope.testsuite.mock.MockLib):
     """Mocks IDS uEye API SDK version 4.90.0035"""
-    def __init__(self, system: MockSystem) -> None:
+    def __init__(self, daemon: MockUeyeusbd) -> None:
         super().__init__()
-        self._system = system
+        self._daemon = daemon
 
 
     def is_InitCamera(self, phCam, hWnd):
@@ -512,27 +596,21 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
         ## If any error happens, hCam is set to / remains zero.
         hCam.value = 0
         if device_id == 0:
-            camera = self._system.get_next_available_camera()
+            camera = self._daemon.get_next_available_camera()
             if camera is None:
                 return 3 # IS_CANT_OPEN_DEVICE
         else:
-            try:
-                camera = self._system.get_camera(device_id)
-            except KeyError: # no such device
-                return 3 # IS_CANT_OPEN_DEVICE
+            camera = self._daemon.get_camera(device_id)
         if not camera.on_closed_mode(): # device already open
             return 3 # IS_CANT_OPEN_DEVICE
 
         camera.to_freerun_mode()
-        hCam.value = self._system.get_device_id(camera)
+        hCam.value = self._daemon.get_device_id(camera)
         return 0 # IS_SUCCESS
 
 
     def is_CameraStatus(self, hCam, nInfo, ulValue):
-        try:
-            camera = self._system.get_camera(hCam.value)
-        except KeyError:
-            return 1 # IS_INVALID_CAMERA_HANDLE
+        camera = self._daemon.get_camera(hCam.value)
 
         if nInfo.value == ueye.STANDBY_SUPPORTED:
             if ulValue.value == ueye.GET_STATUS:
@@ -567,7 +645,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
         device_id = hCam.value & (~ ueye.USE_DEVICE_ID)
 
-        camera = self._system.get_camera(device_id)
+        camera = self._daemon.get_camera(device_id)
 
         if nCommand.value == ueye.DEVICE_INFO_CMD_GET_DEVICE_INFO:
             ## TODO: this info we do use
@@ -577,10 +655,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
 
     def is_ExitCamera(self, hCam):
-        try:
-            camera = self._system.get_camera(hCam.value)
-        except KeyError:
-            return 1 # IS_INVALID_CAMERA_HANDLE
+        camera = self._daemon.get_camera(hCam.value)
         if camera.on_closed_mode():
             return 1 # IS_INVALID_CAMERA_HANDLE
         camera.to_closed_mode()
@@ -588,7 +663,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
 
     def is_GetCameraList(self, pucl):
-        n_cameras = self._system.n_cameras
+        n_cameras = self._daemon.n_cameras
 
         ## If dwCount is zero, then it's a request to only get the
         ## number of devices and not to fill the rest of the device
@@ -612,9 +687,9 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
         full_uci = ctypes.cast(ctypes.byref(pucl.contents.uci),
                                ctypes.POINTER(uci_correct_type))
         ## XXX: WTF happens if there's gaps on device ids?
-        for camera, uci in zip(self._system.cameras, full_uci.contents):
+        for camera, uci in zip(self._daemon.cameras, full_uci.contents):
             uci.dwCameraID = camera.camera_id
-            uci.dwDeviceID = self._system.get_device_id(camera)
+            uci.dwDeviceID = self._daemon.get_device_id(camera)
             uci.dwSensorID = camera.sensor_id
             uci.dwInUse = 0 if camera.on_closed_mode() else 1
             uci.SerNo = camera.serial_number.encode()
@@ -624,16 +699,12 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
 
     def is_GetNumberOfCameras(self, pnNumCams):
-        pnNumCams.contents.value = self._system.n_cameras
+        pnNumCams.contents.value = self._daemon.n_cameras
         return 0
 
 
     def is_GetSensorInfo(self, hCam, pInfo):
-        try:
-            camera = self._system.get_camera(hCam.value)
-        except KeyError:
-            return 1
-
+        camera = self._daemon.get_camera(hCam.value)
         if camera.on_closed_mode():
             return 1
 
@@ -647,12 +718,10 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
 
     def is_SetColorMode(self, hCam, Mode):
-        try:
-            camera = self._system.get_camera(hCam.value)
-        except KeyError:
-            return 1 # IS_INVALID_CAMERA_HANDLE
+        camera = self._daemon.get_camera(hCam.value)
         if camera.on_closed_mode():
-            return 1 # IS_INVALID_CAMERA_HANDLE
+            ## Would return 1 (INVALID_CAMERA_HANDLE)
+            raise UnexpectedUsageError('camera is on closed mode')
 
         if Mode.value == ueye.GET_COLOR_MODE:
             return camera.colourmode
@@ -674,10 +743,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
 
     def is_SetExternalTrigger(self, hCam, nTriggerMode):
-        try:
-            camera = self._system.get_camera(hCam.value)
-        except KeyError:
-            return 1
+        camera = self._daemon.get_camera(hCam.value)
         if camera.on_closed_mode():
             return 1
 
@@ -699,10 +765,7 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
 
     def is_Exposure(self, hCam, nCommand, pParam, cbSizeOfParam):
-        try:
-            camera = self._system.get_camera(hCam.value)
-        except KeyError:
-            return 1
+        camera = self._daemon.get_camera(hCam.value)
         if camera.on_closed_mode():
             return 1
 
@@ -725,11 +788,11 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 
 
     def is_SetBinning(self, hCam, mode):
-        camera = self._system.get_camera(hCam.value)
+        camera = self._daemon.get_camera(hCam.value)
 
-        if mode.value = ueye.GET_SUPPORTED_BINNING:
+        if mode.value == ueye.GET_SUPPORTED_BINNING:
             return camera.supported_binnings_mask
-        elif mode.value = ueye.GET_BINNING:
+        elif mode.value == ueye.GET_BINNING:
             raise NotImplementedError()
         else:
             raise NotImplementedError()
@@ -748,8 +811,8 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
 class TestLibueyeWithoutCamera(unittest.TestCase):
     """Test behavior when there are no cameras connected."""
     def setUp(self):
-        self.system = MockSystem()
-        lib  = MockLibueye(self.system)
+        self.daemon = MockUeyeusbd()
+        lib  = MockLibueye(self.daemon)
         libnames = ['libueye_api.so', 'ueye_api', 'ueye_api_64']
         with microscope.testsuite.mock.mocked_c_dll(lib, libnames):
             self.lib = importlib.reload(ueye)
@@ -759,18 +822,6 @@ class TestLibueyeWithoutCamera(unittest.TestCase):
         status = self.lib.InitCamera(ctypes.byref(h), None)
         self.assertEqual(status, 3)
         self.assertEqual(h.value, 0)
-
-    def test_init_given_id_without_cameras(self):
-        h = ueye.HIDS(1 | ueye.USE_DEVICE_ID)
-        status = self.lib.InitCamera(ctypes.byref(h), None)
-        self.assertEqual(status, 3)
-        self.assertEqual(h.value, 0)
-
-    def test_exit_without_cameras(self):
-        h0 = ueye.HIDS(0)
-        h1 = ueye.HIDS(1)
-        self.assertEqual(self.lib.ExitCamera(h0), 1)
-        self.assertEqual(self.lib.ExitCamera(h1), 1)
 
     def test_get_number_of_cameras(self):
         n_cameras = ctypes.c_int(1)
@@ -788,13 +839,13 @@ class TestLibueyeInitCamera(unittest.TestCase):
 
     """
     def setUp(self):
-        self.system = MockSystem()
-        lib  = MockLibueye(self.system)
+        self.daemon = MockUeyeusbd()
+        lib  = MockLibueye(self.daemon)
         libnames = ['libueye_api.so', 'ueye_api', 'ueye_api_64']
         with microscope.testsuite.mock.mocked_c_dll(lib, libnames):
             self.lib = importlib.reload(ueye)
         self.camera = UI306xCP_M()
-        self.system.plug_camera(self.camera)
+        self.daemon.plug_camera(self.camera)
 
     def assertInitWithSuccess(self, h):
         status = self.lib.InitCamera(ctypes.byref(h), None)
@@ -845,11 +896,6 @@ class TestLibueyeInitCamera(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(n_cameras.value, 1)
 
-    def test_set_colourmode(self):
-        """Fails to SetColorMode a closed camera"""
-        status = self.lib.SetColorMode(ueye.HIDS(1), ueye.CM_MONO10)
-        self.assertEqual(status, 1)
-
     def test_set_triggermode(self):
         """Fails to set trigger mode on a closed camera"""
         status = self.lib.SetExternalTrigger(ueye.HIDS(1),
@@ -861,13 +907,13 @@ class TestLibueye(unittest.TestCase):
     """There is only one camera plugged in, so its device ID is 1.
     """
     def setUp(self):
-        self.system = MockSystem()
-        lib  = MockLibueye(self.system)
+        self.daemon = MockUeyeusbd()
+        lib  = MockLibueye(self.daemon)
         libnames = ['libueye_api.so', 'ueye_api', 'ueye_api_64']
         with microscope.testsuite.mock.mocked_c_dll(lib, libnames):
             self.lib = importlib.reload(ueye)
         self.camera = UI306xCP_M()
-        self.system.plug_camera(self.camera)
+        self.daemon.plug_camera(self.camera)
 
         self.h = ueye.HIDS(1 | ueye.USE_DEVICE_ID)
         status = self.lib.InitCamera(ctypes.byref(self.h), None)
@@ -1012,10 +1058,6 @@ class TestLibueye(unittest.TestCase):
         self.assertSuccess(self.lib.SetColorMode(self.h, ueye.CM_MONO16))
         self.assertEqual(self.camera.colourmode, ueye.CM_MONO16)
 
-    def test_set_colourmode_invalid_id(self):
-        status = self.lib.SetColorMode(ueye.HIDS(9), ueye.CM_MONO10)
-        self.assertEqual(status, 1)
-
     def test_get_colourmode(self):
         self.assertEqual(self.lib.SetColorMode(self.h, ueye.GET_COLOR_MODE),
                          self.camera.colourmode)
@@ -1048,11 +1090,6 @@ class TestLibueye(unittest.TestCase):
         self.assertSuccess(status)
         self.assertTrue(self.camera.on_trigger_mode())
         self.assertEqual(self.camera.trigger_mode, ueye.SET_TRIGGER_SOFTWARE)
-
-    def test_set_triggermode_invalid_id(self):
-        status = self.lib.SetExternalTrigger(ueye.HIDS(9),
-                                             ueye.SET_TRIGGER_SOFTWARE)
-        self.assertEqual(status, 1)
 
     def test_get_supported_trigger_modes(self):
         modes = self.lib.SetExternalTrigger(self.h,
@@ -1089,12 +1126,12 @@ class TestLibueye(unittest.TestCase):
 
 class InitUI306xCP_M(unittest.TestCase):
     def setUp(self):
-        system = MockSystem()
+        daemon = MockUeyeusbd()
 
         ## TODO: Maybe the libnames should be properties on the lib?
         ## Or maybe we should limit the patching to the only place
         ## where the patch is needed and skip the names altogether,
-        lib  = MockLibueye(system)
+        lib  = MockLibueye(daemon)
         libnames = ['libueye_api.so', 'ueye_api', 'ueye_api_64']
 
         with microscope.testsuite.mock.mocked_c_dll(lib, libnames):
@@ -1103,7 +1140,7 @@ class InitUI306xCP_M(unittest.TestCase):
             importlib.reload(ueye)
 
         self.fake = UI306xCP_M()
-        system.plug_camera(self.fake)
+        daemon.plug_camera(self.fake)
 
     def test_init_by_serial_number(self):
         self.device = microscope.cameras.ids.IDSuEye(self.fake.serial_number)
@@ -1116,12 +1153,12 @@ class InitUI306xCP_M(unittest.TestCase):
 class TestUI306xCP_M(unittest.TestCase,
                      microscope.testsuite.test_devices.CameraTests):
     def setUp(self):
-        system = MockSystem()
+        daemon = MockUeyeusbd()
 
         ## TODO: Maybe the libnames should be properties on the lib?
         ## Or maybe we should limit the patching to the only place
         ## where the patch is needed and skip the names altogether,
-        lib  = MockLibueye(system)
+        lib  = MockLibueye(daemon)
         libnames = ['libueye_api.so', 'ueye_api', 'ueye_api_64']
 
         with microscope.testsuite.mock.mocked_c_dll(lib, libnames):
@@ -1130,7 +1167,7 @@ class TestUI306xCP_M(unittest.TestCase,
             importlib.reload(ueye)
 
         self.fake = UI306xCP_M()
-        system.plug_camera(self.fake)
+        daemon.plug_camera(self.fake)
         self.device = microscope.cameras.ids.IDSuEye()
 
     def tearDown(self):
