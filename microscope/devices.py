@@ -375,7 +375,6 @@ class DataDevice(Device):
 
     Derived classed should implement::
       * abort(self)                ---  required
-      * start_acquisition(self)    ---  required
       * _fetch_data(self)          ---  required
       * _process_data(self, data)  ---  optional
 
@@ -387,8 +386,6 @@ class DataDevice(Device):
     def __init__(self, buffer_length=0, **kwargs):
         """Derived.__init__ must call this at some point."""
         super(DataDevice, self).__init__(**kwargs)
-        # A length-1 buffer for fetching data.
-        self._data = None
         # A thread to fetch and dispatch data.
         self._fetch_thread = None
         # A flag to control the _fetch_thread.
@@ -1106,7 +1103,6 @@ class FilterWheelBase(Device):
 
     def get_filters(self):
         return [(k,v) for k,v in self._filters.items()]
-
 
 @contextlib.contextmanager
 def enabled_device(device):
