@@ -782,10 +782,14 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
     def is_PixelClock(self, hCam, nCommand, pParam, cbSizeOfParam):
         raise NotImplementedError()
 
+    def is_GetFrameTimeRange(self, hCam, min, max, intervall):
+        raise NotImplementedError()
 
     def is_FreezeVideo(self, hCam, Wait):
         raise NotImplementedError()
 
+    def is_StopLiveVideo(self, hCam, Wait):
+        raise NotImplementedError()
 
     def is_SetBinning(self, hCam, mode):
         camera = self._daemon.get_camera(hCam.value)
@@ -805,6 +809,16 @@ class MockLibueye(microscope.testsuite.mock.MockLib):
         raise NotImplementedError()
 
     def is_FreeImageMem(self, hCam, pcMem, pid):
+        raise NotImplementedError()
+
+
+    def is_EnableEvent(self, hCam, which):
+        raise NotImplementedError()
+
+    def is_WaitEvent(self, hCam, which, nTimeout):
+        raise NotImplementedError()
+
+    def is_DisableEvent(self, hCam, which):
         raise NotImplementedError()
 
 

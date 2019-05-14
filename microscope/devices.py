@@ -526,8 +526,6 @@ class DataDevice(Device):
             try:
                 data = self._fetch_data()
             except Exception as e:
-                import traceback
-                print(traceback.format_exc())
                 self._logger.error("in _fetch_loop:", exc_info=e)
                 # Raising an exception will kill the fetch loop. We need another
                 # way to notify the client that there was a problem.
@@ -535,6 +533,7 @@ class DataDevice(Device):
                 self._put(e, timestamp)
                 data = None
             if data is not None:
+                print(data)
                 # ***TODO*** Add support for timestamp from hardware.
                 timestamp = time.time()
                 self._put(data, timestamp)
@@ -707,6 +706,8 @@ class CameraDevice(DataDevice):
 
     def get_cycle_time(self):
         """Return the cycle time, in seconds."""
+        ## TODO: this seems to be required at least by cockpit but is
+        ## not annotated as an abstractmethod.
         pass
 
     def get_sensor_temperature(self):
@@ -1068,7 +1069,6 @@ class FilterWheelBase(Device):
     __metaclass__ = abc.ABCMeta
 
     def __init__(self, *args, filters=[], positions=0, **kwargs):
-        print('filters are', filters)
         super(FilterWheelBase, self).__init__(*args, **kwargs)
         if isinstance(filters, dict):
             self._filters = filters

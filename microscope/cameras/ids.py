@@ -65,6 +65,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
             raise RuntimeError('no cameras found')
 
         if serial_number is None:
+            ## FIXME: this is bullshit.  Only works with one camera.
             ## If zero is used as device ID during initialisation, the
             ## next available camera is picked.
             self._handle = ueye.HIDS(0)
@@ -85,9 +86,8 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
         ## After Init, the camera is in freerun mode (enabled)
         self.enabled = True
-        self._set_our_default_state()
-
         self._sensor_shape = self._read_sensor_shape() # type: Tuple[int, int]
+        self._set_our_default_state()
 
         ## After Init, the camera is in freerun mode which we consider
         ## enabled.  But after construction, the device must be in
@@ -99,13 +99,14 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         self.set_trigger(microscope.devices.TriggerType.SOFTWARE,
                          microscope.devices.TriggerMode.ONCE)
 
-        ## TODO: we don't know what colourmode should be default.  We
+        ## XXX: we don't know what colourmode should be default.  We
         ## do need to change it because by default it's not even a
-        ## grayscale colourmode.
+        ## grayscale colourmode.  So try all greyscale modes, starting
+        ## with the highest bit depth.
 
         ## There's no function to find the supported colormodes, we
         ## need to try and see what works.
-        for mode in (ueye.CM_MONO10, ueye.CM_MONO12, ueye.CM_MONO10,
+        for mode in (ueye.CM_MONO16, ueye.CM_MONO12, ueye.CM_MONO10,
                      ueye.CM_MONO8):
             status = ueye.SetColorMode(self._handle, mode)
             if status == ueye.SUCCESS:
@@ -117,6 +118,22 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
                                    % status)
         else:
             raise RuntimeError('no colormode of interest is supported')
+
+        ## Having a fixed buffer that we keep reusing is good enough
+        ## while we don't support ROIs, binning, and hardware trigges.
+        colourmode = ueye.SetColorMode(self._handle, ueye.GET_COLOR_MODE)
+        dtype = _COLOURMODE_TO_DTYPE[colourmode]
+        self._buffer = np.empty(self._sensor_shape[::-1], dtype=dtype)
+        buffer_p = self._buffer.ctypes.data_as(ctypes.POINTER(ctypes.c_char))
+        mem_id = ctypes.c_int()
+        status = ueye.SetAllocatedImageMem(self._handle, *self._sensor_shape,
+                                           self._buffer.itemsize * 8, buffer_p,
+                                           mem_id)
+        if status != ueye.SUCCESS:
+            raise RuntimeError()
+        status = ueye.SetImageMem(self._handle, buffer_p, mem_id)
+        if status != ueye.SUCCESS:
+            raise RuntimeError()
 
 
     def initialize(self) -> None:
@@ -153,6 +170,10 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
 
     def _on_enable(self) -> None:
+        ## FIXME: if a software trigger was sent while the camera was
+        ## disable, the acquisition will happen now.  Maybe if we free
+        ## the image memory during disable, and only set it again
+        ## during enable, we can work around that.
         if self._supports_standby():
             status = ueye.CameraStatus(self._handle, ueye.STANDBY, ueye.FALSE)
             if status != ueye.SUCCESS:
@@ -170,50 +191,12 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
             self.enabled = False
 
 
-    def abort(self):
-        ## TODO:
-        ## A hardware triggered image acquisition can be cancelled
-        ## using is_StopLiveVideo() if exposure has not started
-        ## yet. If you call is_FreezeVideo() with the IS_WAIT
-        ## parameter, you have to simulate at trigger signal using
-        ## is_ForceTrigger() to cancel the acquisition.
-        raise NotImplementedError()
-
-
-    def _fetch_data(self) -> typing.Optional[np.ndarray]:
-        ## FIXME: this is enough for software trigger and "slow"
-        ## acquisition rates.  To achive faster speeds we need to set
-        ## a ring buffer and maybe consider making use of freerun
-        ## mode.
-        status = ueye.WaitEvent(self._handle, ueye.SET_EVENT_FRAME, 1)
-        if status == ueye.TIMED_OUT:
-            return None
-        elif status == ueye.SUCCESS:
-            data = self._data_buffer.copy()
-            status = ueye.FreeImageMem(self._handle, self._data_buffer_pointer,
-                                       self._data_mem_id)
-            if status != ueye.SUCCESS:
-                raise RuntimeError('failed to free memory')
-
-            ## not sure if this needs to be done after receiving signal...
-            status = ueye.DisableEvent(self._handle, ueye.SET_EVENT_FRAME)
-            if status != ueye.SUCCESS:
-                raise RuntimeError('failed to disable event')
-            print(data)
-            return data
-        else:
-            ## Does this fails if we never set a an event in the first place?
-            raise RuntimeError('failed waiting for new image (error %d)'
-                               % status)
-
-
     def get_exposure_time(self) -> float:
-        ## Only works when camera is enabled
         time_msec = ctypes.c_double()
-        ## TODO: we do the whole casting of ref to void_p the hard way
-        ## so that it works fine in our mocked libs.  If we figure out
-        ## a way to do the right thing on MockCFuncPtr this could be
-        ## simplified.
+        ## We do the whole casting of the pointer to void_p the hard
+        ## way so that it works fine in our mocked libs.  If we figure
+        ## out a way to do the right thing on MockCFuncPtr this could
+        ## be simplified.
         status = ueye.Exposure(self._handle, ueye.EXPOSURE_CMD.GET_EXPOSURE,
                                ctypes.cast(ctypes.byref(time_msec),
                                            ctypes.c_void_p),
@@ -237,6 +220,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ## range is between 0.02 and 10.14 milliseconds.
         raise NotImplementedError()
 
+
     def _get_sensor_shape(self) -> Tuple[int, int]:
         return self._sensor_shape
 
@@ -257,7 +241,8 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
                                           v=_FLAG_TO_VERT_BINNING[v_bin])
 
     def _set_binning(self, h_bin: int, v_bin: int) -> None:
-        ## TODO: needs testing because our camera does not support binning
+        ## TODO: needs actual testing because our cameras do not
+        ## support binning at all.
         try:
             h_bits = _HORIZONTAL_BINNING_TO_BITS[h_bin]
             v_bits = _VERTICAL_BINNING_TO_BITS[v_bin]
@@ -275,7 +260,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         if status != ueye.IS_SUCCESS:
             raise RuntimeError('Failed to set binning')
 
-        ## XXX: Changing binning affects exposure time, so we need to
+        ## TODO: Changing binning affects exposure time, so we need to
         ## set it again to whatever was before.  When we find out how
         ## that works.
         return None
@@ -315,7 +300,6 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
                                              ueye.SET_TRIGGER_SOFTWARE)
             if status != ueye.SUCCESS:
                 raise RuntimeError('failed to set software trigger mode')
-#            self._using_callback = True
         else:
             ## TODO: need to try this.  In Theory should be easy.
             raise NotImplementedError()
@@ -333,33 +317,51 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
         self._trigger_mode = tmode
 
-    def _prepare_for_acquisition(self) -> None:
-        colourmode = ueye.SetColorMode(self._handle, ueye.GET_COLOR_MODE)
-        dtype = _COLOURMODE_TO_DTYPE[colourmode]
+    def get_cycle_time(self) -> float:
+        ## It is possible to set a delay time between the arrival of a
+        ## trigger signal and the start of exposure.  Because we don't
+        ## have a method for the user to set it, and by default it is
+        ## set to zero, we don't even bother to read it.
 
-        ## Use the pivate version, which is the shape before transform
-        im_size = self._get_sensor_shape()
-        self._data_buffer = np.empty((im_size[1], im_size[0]), dtype=dtype)
-        bits_per_px = self._data_buffer.itemsize * 8
-        self._data_buffer_pointer = self._data_buffer.ctypes.data_as(ctypes.POINTER(ctypes.c_char))
-        self._data_mem_id = ctypes.c_int()
-        status = ueye.SetAllocatedImageMem(self._handle, im_size[0], im_size[1],
-                                           bits_per_px,
-                                           self._data_buffer_pointer,
-                                           self._data_mem_id)
+        ## From "Camera basics > Operating modes > Trigger mode":
+        ##
+        ## The time required for capturing a frame in trigger mode can
+        ## be approximated with the following formula:
+        ##
+        ##     t_capture = exposure_time + (1 / max_frame_rate)
+        ##     t_capture = exposure_time + (1 / (1 / min_frame_duration))
+        ##     t_capture = exposure_time + min_frame_duration
+        min_frame_duration = ctypes.c_double()
+        max_frame_duration = ctypes.c_double()
+        increment = ctypes.c_double()
+        status = ueye.GetFrameTimeRange(self._handle, min_frame_duration,
+                                        max_frame_duration, increment)
         if status != ueye.SUCCESS:
             raise RuntimeError()
-        status = ueye.SetImageMem(self._handle, self._data_buffer_pointer,
-                                  self._data_mem_id)
-        if status != ueye.SUCCESS:
-            raise RuntimeError()
+        return self.get_exposure_time() +  min_frame_duration.value
 
-    def get_cycle_time(self):
-        ## TODO: this seems to be required but is not marked as abstractmethod
-        return 0.1
+
+    def _fetch_data(self) -> typing.Optional[np.ndarray]:
+        ## FIXME: this is enough for software trigger and "slow"
+        ## acquisition rates.  To achive faster speeds we need to set
+        ## a ring buffer and maybe consider making use of freerun
+        ## mode.
+        status = ueye.WaitEvent(self._handle, ueye.SET_EVENT_FRAME, 1)
+        if status == ueye.TIMED_OUT:
+            return None
+        elif status == ueye.SUCCESS:
+            data = self._buffer.copy()
+            status = ueye.DisableEvent(self._handle, ueye.SET_EVENT_FRAME)
+            if status != ueye.SUCCESS:
+                raise RuntimeError('failed to disable event')
+            return data
+        else:
+            ## Does this fails if we never set a an event in the first place?
+            raise RuntimeError('failed waiting for new image (error %d)'
+                               % status)
+
 
     def trigger(self) -> None:
-        self._prepare_for_acquisition()
         if self._trigger_type != microscope.devices.TriggerType.SOFTWARE:
             raise RuntimeError("current trigger type is '%s', not SOFTWARE"
                                % self._trigger_type)
@@ -378,52 +380,10 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         self.trigger()
 
 
-    def acquire(self) -> np.array:
-        """Acquire image (blocking call)"""
-        colourmode = ueye.SetColorMode(self._handle, ueye.GET_COLOR_MODE)
-        dtype = _COLOURMODE_TO_DTYPE[colourmode]
-
-        im_size = self.get_sensor_shape()
-        buffer = np.empty(im_size, dtype=dtype)
-        bits_per_px = buffer.itemsize * 8
-        buffer_pointer = buffer.ctypes.data_as(ctypes.POINTER(ctypes.c_char))
-        mem_id = ctypes.c_int()
-        status = ueye.SetAllocatedImageMem(self._handle, im_size[0], im_size[1],
-                                           bits_per_px, buffer_pointer, mem_id)
+    def abort(self):
+        status = ueye.StopLiveVideo(self._handle, ueye.FORCE_VIDEO_STOP)
         if status != ueye.SUCCESS:
             raise RuntimeError()
-        status = ueye.SetImageMem(self._handle, buffer_pointer, mem_id)
-        if status != ueye.SUCCESS:
-            raise RuntimeError()
-        status = ueye.FreezeVideo(self._handle, ueye.WAIT)
-        if status != ueye.SUCCESS:
-            raise RuntimeError()
-        status = ueye.FreeImageMem(self._handle, buffer_pointer, mem_id)
-        if status != ueye.SUCCESS:
-            raise RuntimeError()
-        return buffer
-
-    def experiment(self):
-        ## Experimental Acquires images without blocking
-        if status != ueye.SUCCESS:
-            raise RuntimeError()
-        nRet = ueye.WaitEvent(self._handle, ueye.SET_EVENT_FRAME, 1000)
-        if nRet == ueye.TIMED_OUT:
-            raise RuntimeError()
-        elif nRet == ueye.SUCCESS:
-            pass
-        else:
-            raise RuntimeError('got %d' % nRet)
-
-        status = ueye.FreeImageMem(self._handle, buffer_pointer, mem_id)
-        if status != ueye.SUCCESS:
-            raise RuntimeError()
-
-        ## not sure if this needs to be done after receiving signal...
-        status = ueye.DisableEvent(self._handle, ueye.SET_EVENT_FRAME)
-        if status != ueye.SUCCESS:
-            raise RuntimeError()
-        return buffer
 
 
     def _is_open(self) -> bool:
@@ -461,6 +421,7 @@ _FLAG_TO_HORZ_BINNING = {
 } # type: typing.Mapping[int, int]
 
 _HORZ_BINNING_TO_FLAG = {v:k for k, v in _FLAG_TO_HORZ_BINNING.items()}
+
 
 _FLAG_TO_VERT_BINNING = {
     0 : 1,

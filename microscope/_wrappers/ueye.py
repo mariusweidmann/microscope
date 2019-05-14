@@ -104,6 +104,10 @@ GET_MIN_TRIGGER_DELAY = 0x8001
 GET_MAX_TRIGGER_DELAY = 0x8002
 GET_TRIGGER_DELAY_GRANULARITY = 0x8003
 
+## Timing
+GET_PIXEL_CLOCK = 0x8000
+GET_PIXEL_CLOCK_INC = 0x8005
+
 
 ## Binning
 GET_BINNING = 0x8000
@@ -419,8 +423,15 @@ SetColorMode = prototype('is_SetColorMode', [HIDS, INT])
 
 SetExternalTrigger = prototype('is_SetExternalTrigger', [HIDS, INT])
 
+GetFrameTimeRange = prototype('is_GetFrameTimeRange',
+                              [HIDS, ctypes.POINTER(ctypes.c_double),
+                               ctypes.POINTER(ctypes.c_double),
+                               ctypes.POINTER(ctypes.c_double)])
+
 SetImageMem = prototype('is_SetImageMem',
                         [HIDS, ctypes.POINTER(ctypes.c_char), ctypes.c_int])
+
+StopLiveVideo = prototype('is_StopLiveVideo', [HIDS, INT])
 
 if platform.system() != 'Windows':
     WaitEvent = prototype('is_WaitEvent', [HIDS, INT, INT])
