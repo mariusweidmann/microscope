@@ -19,6 +19,12 @@
 ## along with Microscope.  If not, see <http://www.gnu.org/licenses/>.
 
 """Interface to IDS cameras.
+
+.. todo::
+   Make software trigger work on windows.  See the documentation for
+   `is_EnableEvent` for an example.  The code, and even the available
+   methods, is different for windows and Linux.
+
 """
 
 import ctypes
@@ -99,7 +105,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
         ## There's no function to find the supported colormodes, we
         ## need to try and see what works.
-        for mode in (ueye.CM_MONO16, ueye.CM_MONO12, ueye.CM_MONO10,
+        for mode in (ueye.CM_MONO10, ueye.CM_MONO12, ueye.CM_MONO10,
                      ueye.CM_MONO8):
             status = ueye.SetColorMode(self._handle, mode)
             if status == ueye.SUCCESS:
@@ -174,8 +180,31 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         raise NotImplementedError()
 
 
-    def _fetch_data(self):
-        raise NotImplementedError()
+    def _fetch_data(self) -> typing.Optional[np.ndarray]:
+        ## FIXME: this is enough for software trigger and "slow"
+        ## acquisition rates.  To achive faster speeds we need to set
+        ## a ring buffer and maybe consider making use of freerun
+        ## mode.
+        status = ueye.WaitEvent(self._handle, ueye.SET_EVENT_FRAME, 1)
+        if status == ueye.TIMED_OUT:
+            return None
+        elif status == ueye.SUCCESS:
+            data = self._data_buffer.copy()
+            status = ueye.FreeImageMem(self._handle, self._data_buffer_pointer,
+                                       self._data_mem_id)
+            if status != ueye.SUCCESS:
+                raise RuntimeError('failed to free memory')
+
+            ## not sure if this needs to be done after receiving signal...
+            status = ueye.DisableEvent(self._handle, ueye.SET_EVENT_FRAME)
+            if status != ueye.SUCCESS:
+                raise RuntimeError('failed to disable event')
+            print(data)
+            return data
+        else:
+            ## Does this fails if we never set a an event in the first place?
+            raise RuntimeError('failed waiting for new image (error %d)'
+                               % status)
 
 
     def get_exposure_time(self) -> float:
@@ -286,7 +315,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
                                              ueye.SET_TRIGGER_SOFTWARE)
             if status != ueye.SUCCESS:
                 raise RuntimeError('failed to set software trigger mode')
-            self._using_callback = True
+#            self._using_callback = True
         else:
             ## TODO: need to try this.  In Theory should be easy.
             raise NotImplementedError()
@@ -304,13 +333,41 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
         self._trigger_mode = tmode
 
+    def _prepare_for_acquisition(self) -> None:
+        colourmode = ueye.SetColorMode(self._handle, ueye.GET_COLOR_MODE)
+        dtype = _COLOURMODE_TO_DTYPE[colourmode]
+
+        ## Use the pivate version, which is the shape before transform
+        im_size = self._get_sensor_shape()
+        self._data_buffer = np.empty((im_size[1], im_size[0]), dtype=dtype)
+        bits_per_px = self._data_buffer.itemsize * 8
+        self._data_buffer_pointer = self._data_buffer.ctypes.data_as(ctypes.POINTER(ctypes.c_char))
+        self._data_mem_id = ctypes.c_int()
+        status = ueye.SetAllocatedImageMem(self._handle, im_size[0], im_size[1],
+                                           bits_per_px,
+                                           self._data_buffer_pointer,
+                                           self._data_mem_id)
+        if status != ueye.SUCCESS:
+            raise RuntimeError()
+        status = ueye.SetImageMem(self._handle, self._data_buffer_pointer,
+                                  self._data_mem_id)
+        if status != ueye.SUCCESS:
+            raise RuntimeError()
+
+    def get_cycle_time(self):
+        ## TODO: this seems to be required but is not marked as abstractmethod
+        return 0.1
 
     def trigger(self) -> None:
+        self._prepare_for_acquisition()
         if self._trigger_type != microscope.devices.TriggerType.SOFTWARE:
             raise RuntimeError("current trigger type is '%s', not SOFTWARE"
                                % self._trigger_type)
         ## XXX: to support START/STROBE modes, I think we need to call
         ## CaptureVideo instead.
+        status = ueye.EnableEvent(self._handle, ueye.SET_EVENT_FRAME)
+        if status != ueye.SUCCESS:
+            raise RuntimeError()
         status = ueye.FreezeVideo(self._handle, ueye.DONT_WAIT)
         if status != ueye.SUCCESS:
             ## if status == 108, it's because there is no active memory
@@ -348,27 +405,22 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
     def experiment(self):
         ## Experimental Acquires images without blocking
-        colourmode = ueye.SetColorMode(self._handle, ueye.GET_COLOR_MODE)
-        dtype = _COLOURMODE_TO_DTYPE[colourmode]
+        if status != ueye.SUCCESS:
+            raise RuntimeError()
+        nRet = ueye.WaitEvent(self._handle, ueye.SET_EVENT_FRAME, 1000)
+        if nRet == ueye.TIMED_OUT:
+            raise RuntimeError()
+        elif nRet == ueye.SUCCESS:
+            pass
+        else:
+            raise RuntimeError('got %d' % nRet)
 
-        im_size = self.get_sensor_shape()
-        buffer = np.empty(im_size, dtype=dtype)
-        bits_per_px = buffer.itemsize * 8
-        buffer_pointer = buffer.ctypes.data_as(ctypes.POINTER(ctypes.c_char))
-        mem_id = ctypes.c_int()
-        status = ueye.SetAllocatedImageMem(self._handle, im_size[0], im_size[1],
-                                           bits_per_px, buffer_pointer, mem_id)
-        if status != ueye.SUCCESS:
-            raise RuntimeError()
-        status = ueye.SetImageMem(self._handle, buffer_pointer, mem_id)
-        if status != ueye.SUCCESS:
-            raise RuntimeError()
-        status = ueye.FreezeVideo(self._handle, ueye.DONT_WAIT)
-        if status != ueye.SUCCESS:
-            raise RuntimeError()
-        import time
-        time.sleep(1)
         status = ueye.FreeImageMem(self._handle, buffer_pointer, mem_id)
+        if status != ueye.SUCCESS:
+            raise RuntimeError()
+
+        ## not sure if this needs to be done after receiving signal...
+        status = ueye.DisableEvent(self._handle, ueye.SET_EVENT_FRAME)
         if status != ueye.SUCCESS:
             raise RuntimeError()
         return buffer

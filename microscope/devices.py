@@ -529,6 +529,8 @@ class DataDevice(Device):
             try:
                 data = self._fetch_data()
             except Exception as e:
+                import traceback
+                print(traceback.format_exc())
                 self._logger.error("in _fetch_loop:", exc_info=e)
                 # Raising an exception will kill the fetch loop. We need another
                 # way to notify the client that there was a problem.

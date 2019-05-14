@@ -63,7 +63,9 @@ IS_IO_REQUEST_FAILED = 2 # an io request to the driver failed
 CANT_OPEN_DEVICE = 3 # returned by is_InitCamera
 INVALID_MODE = 101
 NO_ACTIVE_IMG_MEM = 108
+TIMED_OUT = 122
 INVALID_PARAMETER = 125
+INVALID_BUFFER_SIZE = 159
 INVALID_COLOR_FORMAT = 174
 
 ## Device enumeration
@@ -199,6 +201,10 @@ CM_RGB8_PLANAR = (1 | CM_ORDER_RGB | CM_FORMAT_PLANAR)
 
 CM_ALL_POSSIBLE = 0xFFFF
 CM_MODE_MASK = 0x007F
+
+
+## Event constants
+SET_EVENT_FRAME = 2
 
 
 ## Camera info constants
@@ -379,6 +385,10 @@ CameraStatus = prototype('is_CameraStatus', [HIDS, INT, ULONG], IDSEXPUL)
 
 DeviceInfo = prototype('is_DeviceInfo', [HIDS, UINT, ctypes.c_void_p, UINT])
 
+DisableEvent = prototype('is_DisableEvent', [HIDS, INT])
+
+EnableEvent = prototype('is_EnableEvent', [HIDS, INT])
+
 ExitCamera = prototype('is_ExitCamera', [HIDS])
 
 Exposure = prototype('is_Exposure', [HIDS, UINT, ctypes.c_void_p, UINT])
@@ -411,3 +421,6 @@ SetExternalTrigger = prototype('is_SetExternalTrigger', [HIDS, INT])
 
 SetImageMem = prototype('is_SetImageMem',
                         [HIDS, ctypes.POINTER(ctypes.c_char), ctypes.c_int])
+
+if platform.system() != 'Windows':
+    WaitEvent = prototype('is_WaitEvent', [HIDS, INT, INT])
