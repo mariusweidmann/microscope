@@ -393,6 +393,8 @@ DisableEvent = prototype('is_DisableEvent', [HIDS, INT])
 
 EnableEvent = prototype('is_EnableEvent', [HIDS, INT])
 
+InitEvent = prototype('is_InitEvent',[HIDS, ctypes.c_void_p, INT])
+
 ExitCamera = prototype('is_ExitCamera', [HIDS])
 
 Exposure = prototype('is_Exposure', [HIDS, UINT, ctypes.c_void_p, UINT])

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+
 # -*- coding: utf-8 -*-
 
 ## Copyright (C) 2019 David Miguel Susano Pinto <david.pinto@bioch.ox.ac.uk>
@@ -37,6 +37,8 @@ import numpy as np
 import microscope.devices
 from microscope._wrappers import ueye
 
+import platform
+import win32event
 
 class IDSuEye(microscope.devices.TriggerTargetMixIn,
               microscope.devices.CameraDevice):
@@ -226,7 +228,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
 
     def _get_roi(self) -> Tuple[int, int, int, int]:
-        raise NotImplementedError()
+        return(0,0,*self._sensor_shape)
 
     def _set_roi(self, left: int, top: int, width: int, height: int) -> None:
         raise NotImplementedError()
@@ -346,19 +348,39 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ## acquisition rates.  To achive faster speeds we need to set
         ## a ring buffer and maybe consider making use of freerun
         ## mode.
-        status = ueye.WaitEvent(self._handle, ueye.SET_EVENT_FRAME, 1)
-        if status == ueye.TIMED_OUT:
-            return None
-        elif status == ueye.SUCCESS:
-            data = self._buffer.copy()
-            status = ueye.DisableEvent(self._handle, ueye.SET_EVENT_FRAME)
+        import ctypes.wintypes
+
+        h_event = None
+        if platform.system() == 'Windows':
+            h_event = win32event.CreateEvent(None, False, False, None)
+            self.event = ctypes.wintypes.HANDLE(int(h_event))
+            ueye.InitEvent(self._handle, self.event, ueye.SET_EVENT_FRAME)
+
+
+        if platform.system() == 'Windows':
+            status = win32event.WaitForSingleObject(h_event, 1)
+            if status==win32event.WAIT_TIMEOUT:
+                return None
+            elif status!=win32event.WAIT_OBJECT_0:
+                raise RuntimeError('failed waiting for new image (win32error %d)'
+                               % status)
+
+            
+        elif platform.system() == 'Linux':
+            status = ueye.WaitEvent(self._handle, ueye.SET_EVENT_FRAME, 1)
+
+            if status == ueye.TIMED_OUT:
+                return None
+
             if status != ueye.SUCCESS:
                 raise RuntimeError('failed to disable event')
-            return data
-        else:
-            ## Does this fails if we never set a an event in the first place?
-            raise RuntimeError('failed waiting for new image (error %d)'
-                               % status)
+            
+        
+
+        data = self._buffer.copy()
+        status = ueye.DisableEvent(self._handle, ueye.SET_EVENT_FRAME)
+        return data
+
 
 
     def trigger(self) -> None:
@@ -461,3 +483,13 @@ def _get_info_of_all_cameras() -> typing.Iterable[ueye.UEYE_CAMERA_INFO]:
     if status != ueye.SUCCESS:
         raise RuntimeError('failed to call GetCameraList (errno %d)' % status)
     return camera_list.uci
+
+
+def testfunction():
+    import time
+    d=IDSuEye()
+    d.trigger()
+#    time.sleep(1)
+    d._fetch_data()
+#d=IDSuEye()
+#testfunction()
