@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 
 ## Copyright (C) 2019 David Miguel Susano Pinto <david.pinto@bioch.ox.ac.uk>
@@ -28,6 +27,7 @@
 """
 
 import ctypes
+import ctypes.wintypes
 import typing
 from typing import Tuple
 
@@ -349,24 +349,18 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ## acquisition rates.  To achive faster speeds we need to set
         ## a ring buffer and maybe consider making use of freerun
         ## mode.
-        import ctypes.wintypes
-
-        h_event = None
-        if platform.system() == 'Windows':
-            h_event = win32event.CreateEvent(None, False, False, None)
-            self.event = ctypes.wintypes.HANDLE(int(h_event))
-            ueye.InitEvent(self._handle, self.event, ueye.SET_EVENT_FRAME)
-
+        if self._h_event is None:
+            return None
 
         if platform.system() == 'Windows':
-            status = win32event.WaitForSingleObject(h_event, 1)
+            status = win32event.WaitForSingleObject(self._h_event, 1)
             if status==win32event.WAIT_TIMEOUT:
                 return None
             elif status!=win32event.WAIT_OBJECT_0:
                 raise RuntimeError('failed waiting for new image (win32error %d)'
                                % status)
 
-            
+
         elif platform.system() == 'Linux':
             status = ueye.WaitEvent(self._handle, ueye.SET_EVENT_FRAME, 1)
 
@@ -375,8 +369,8 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
             if status != ueye.SUCCESS:
                 raise RuntimeError('failed to disable event')
-            
-        
+
+
 
         data = self._buffer.copy()
         status = ueye.DisableEvent(self._handle, ueye.SET_EVENT_FRAME)
@@ -385,7 +379,8 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         status = ueye.ExitEvent(self._handle, ueye.SET_EVENT_FRAME)
         if status != ueye.SUCCESS:
             raise RuntimeError()
-        status = win32event.CloseHandle(h_event)
+        status = win32event.CloseHandle(self._h_event)
+        self._h_event = None
         if status == 0:
             raise RuntimeError()
         return data
@@ -396,6 +391,13 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         if self._trigger_type != microscope.devices.TriggerType.SOFTWARE:
             raise RuntimeError("current trigger type is '%s', not SOFTWARE"
                                % self._trigger_type)
+
+        self._h_event = None
+        if platform.system() == 'Windows':
+            self._h_event = win32event.CreateEvent(None, False, False, None)
+            self.event = ctypes.wintypes.HANDLE(int(self._h_event))
+            ueye.InitEvent(self._handle, self.event, ueye.SET_EVENT_FRAME)
+
         ## XXX: to support START/STROBE modes, I think we need to call
         ## CaptureVideo instead.
         status = ueye.EnableEvent(self._handle, ueye.SET_EVENT_FRAME)
