@@ -380,6 +380,14 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
         data = self._buffer.copy()
         status = ueye.DisableEvent(self._handle, ueye.SET_EVENT_FRAME)
+        if status != ueye.SUCCESS:
+            raise RuntimeError()
+        status = ueye.ExitEvent(self._handle, ueye.SET_EVENT_FRAME)
+        if status != ueye.SUCCESS:
+            raise RuntimeError()
+        status = win32event.CloseHandle(h_event)
+        if status == 0:
+            raise RuntimeError()
         return data
 
 
