@@ -533,7 +533,6 @@ class DataDevice(Device):
                 self._put(e, timestamp)
                 data = None
             if data is not None:
-                print(data)
                 # ***TODO*** Add support for timestamp from hardware.
                 timestamp = time.time()
                 self._put(data, timestamp)
