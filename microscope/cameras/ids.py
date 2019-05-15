@@ -226,6 +226,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
 
     def _get_roi(self) -> Tuple[int, int, int, int]:
+        return (0, 0, *self._sensor_shape)
         raise NotImplementedError()
 
     def _set_roi(self, left: int, top: int, width: int, height: int) -> None:
