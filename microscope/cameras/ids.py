@@ -38,7 +38,9 @@ import microscope.devices
 from microscope._wrappers import ueye
 
 import platform
-import win32event
+if platform.system() == 'Windows':
+    import win32event
+    import win32api
 
 class IDSuEye(microscope.devices.TriggerTargetMixIn,
               microscope.devices.CameraDevice):
@@ -62,6 +64,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ## the camera handle has the same value as the device ID.  We
         ## use it like that.
         self._handle = ueye.HIDS()
+        self._h_event=None
 
         if _total_number_of_cameras() == 0:
             raise RuntimeError('no cameras found')
@@ -370,7 +373,8 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
             if status != ueye.SUCCESS:
                 raise RuntimeError('failed to disable event')
 
-
+        else:
+            raise SystemError()
 
         data = self._buffer.copy()
         status = ueye.DisableEvent(self._handle, ueye.SET_EVENT_FRAME)
@@ -379,7 +383,8 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         status = ueye.ExitEvent(self._handle, ueye.SET_EVENT_FRAME)
         if status != ueye.SUCCESS:
             raise RuntimeError()
-        status = win32event.CloseHandle(self._h_event)
+        if platform.system()=='Windows':
+            status = win32api.CloseHandle(self._h_event)
         self._h_event = None
         if status == 0:
             raise RuntimeError()
