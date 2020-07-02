@@ -60,6 +60,10 @@ optional_c_libs = [
     'pvcam.so',
     'pvcam32',
     'pvcam64',
+    ## IDS uEye SDK
+    'libueye_api.so',
+    'ueye_api',
+    'ueye_api_64',
 ]
 
 ## Shadow the sphinx provided command, in order to run sphinx-apidoc

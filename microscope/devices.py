@@ -25,6 +25,7 @@ device may be served from a separate process, or even from a different PC.
 """
 
 import abc
+import contextlib
 import functools
 import itertools
 import logging
@@ -875,7 +876,11 @@ class TriggerTargetMixIn(metaclass=abc.ABCMeta):
         raise NotImplementedError()
 
     @abc.abstractmethod
+<<<<<<< HEAD
     def set_trigger(self, ttype: TriggerType, tmode: TriggerMode) -> None:
+=======
+    def set_trigger(self, ttype: TriggerType, tmode: TriggerMode):
+>>>>>>> ids-cameras
         """Set device for a specific trigger.
         """
         pass
@@ -1090,11 +1095,20 @@ class LaserDevice(Device, metaclass=abc.ABCMeta):
         self._set_power_mw(mw)
 
 
+<<<<<<< HEAD
 class FilterWheelBase(Device, metaclass=abc.ABCMeta):
     def __init__(self, filters: typing.Union[typing.Mapping[int, str],
                                              typing.Iterable] = [],
                  positions: int = 0, **kwargs) -> None:
         super().__init__(**kwargs)
+=======
+class FilterWheelBase(Device):
+    __metaclass__ = abc.ABCMeta
+
+    def __init__(self, *args, filters=[], positions=0, **kwargs):
+        print('filters are', filters)
+        super(FilterWheelBase, self).__init__(*args, **kwargs)
+>>>>>>> ids-cameras
         if isinstance(filters, dict):
             self._filters = filters
         else:
@@ -1125,6 +1139,7 @@ class FilterWheelBase(Device, metaclass=abc.ABCMeta):
         """Set the wheel position."""
         pass
 
+<<<<<<< HEAD
     def get_filters(self) -> typing.List[typing.Tuple[int, str]]:
         return [(k, v) for k, v in self._filters.items()]
 
@@ -1375,3 +1390,25 @@ class StageDevice(Device, metaclass=abc.ABCMeta):
 
         """
         raise NotImplementedError()
+=======
+    def get_filters(self):
+        return [(k,v) for k,v in self._filters.items()]
+
+
+@contextlib.contextmanager
+def enabled_device(device):
+    """Context manager to enable/disable device.
+
+    Enables a device for a `with` context and returns to its state at
+    exit.
+    """
+    was_enabled = device.enabled
+    if was_enabled:
+        yield device
+    else:
+        try:
+            device.enable()
+            yield device
+        finally:
+            device.disable()
+>>>>>>> ids-cameras

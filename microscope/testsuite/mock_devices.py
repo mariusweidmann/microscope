@@ -645,7 +645,7 @@ class OmicronDeepstarLaserMock(SerialMock):
                 self.power =  level * self.max_power
                 answer = command
             else:
-                raise RuntimeError("invalid command '%'" % command)
+                raise RuntimeError("invalid command '%s'" % command)
 
         ## Power level
         elif command == b'P?':

@@ -13,11 +13,17 @@ List of supported devices
 Cameras
 -------
 
+<<<<<<< HEAD
 - Andor (:class:`microscope.cameras.andorsdk3` and
   :class:`microscope.cameras.atmcd`)
 - Photometrics (:class:`microscope.cameras.pvcam`)
 - QImaging (:class:`microscope.cameras.pvcam`)
 - Ximea (:class:`microscope.cameras.ximea`)
+=======
+- Andor (:class:`microscope.cameras.andorsdk3`)
+- Photometrics PVCAM (:class:`microscope.cameras.pvcam`)
+- IDS uEye (:class:`microscope.cameras.ids`)
+>>>>>>> ids-cameras
 
 Deformable Mirrors
 ------------------
