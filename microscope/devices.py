@@ -878,11 +878,7 @@ class TriggerTargetMixIn(metaclass=abc.ABCMeta):
         raise NotImplementedError()
 
     @abc.abstractmethod
-<<<<<<< HEAD
     def set_trigger(self, ttype: TriggerType, tmode: TriggerMode) -> None:
-=======
-    def set_trigger(self, ttype: TriggerType, tmode: TriggerMode):
->>>>>>> ids-cameras
         """Set device for a specific trigger.
         """
         pass
@@ -1097,19 +1093,11 @@ class LaserDevice(Device, metaclass=abc.ABCMeta):
         self._set_power_mw(mw)
 
 
-<<<<<<< HEAD
-class FilterWheelBase(Device, metaclass=abc.ABCMeta):
-    def __init__(self, filters: typing.Union[typing.Mapping[int, str],
-                                             typing.Iterable] = [],
-                 positions: int = 0, **kwargs) -> None:
-        super().__init__(**kwargs)
-=======
 class FilterWheelBase(Device):
     __metaclass__ = abc.ABCMeta
 
     def __init__(self, *args, filters=[], positions=0, **kwargs):
         super(FilterWheelBase, self).__init__(*args, **kwargs)
->>>>>>> ids-cameras
         if isinstance(filters, dict):
             self._filters = filters
         else:
@@ -1140,7 +1128,6 @@ class FilterWheelBase(Device):
         """Set the wheel position."""
         pass
 
-<<<<<<< HEAD
     def get_filters(self) -> typing.List[typing.Tuple[int, str]]:
         return [(k, v) for k, v in self._filters.items()]
 
@@ -1391,13 +1378,8 @@ class StageDevice(Device, metaclass=abc.ABCMeta):
 
         """
         raise NotImplementedError()
-=======
     def get_filters(self):
         return [(k,v) for k,v in self._filters.items()]
-<<<<<<< HEAD
-=======
-
->>>>>>> master
 
 @contextlib.contextmanager
 def enabled_device(device):
@@ -1415,7 +1397,4 @@ def enabled_device(device):
             yield device
         finally:
             device.disable()
-<<<<<<< HEAD
-=======
->>>>>>> ids-cameras
->>>>>>> master
+

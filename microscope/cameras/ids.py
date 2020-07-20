@@ -27,7 +27,6 @@
 """
 
 import ctypes
-import ctypes.wintypes
 import typing
 from typing import Tuple
 
@@ -41,6 +40,7 @@ import platform
 if platform.system() == 'Windows':
     import win32event
     import win32api
+    import ctypes.wintypes
 
 class IDSuEye(microscope.devices.TriggerTargetMixIn,
               microscope.devices.CameraDevice):

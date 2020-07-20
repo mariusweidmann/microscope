@@ -14,7 +14,7 @@ import microscope.cameras.ids as idscamera
 DEVICES = [
 	#device(idscamera.IDSuEye, '127.0.0.1',7999),
     device(testdevices.TestCamera, '127.0.0.1', 8000,),
-	device(testdevices.TestCamera, '127.0.0.1', 8001, com=6, baud=115200),
+	#device(testdevices.TestCamera, '127.0.0.1', 8001, com=6, baud=115200),
 	device(testdevices.TestLaser, '127.0.0.1', 8002),
 	device(testdevices.TestLaser, '127.0.0.1', 8003),
 	device(testdevices.TestFilterWheel, '127.0.0.1', 8004),
