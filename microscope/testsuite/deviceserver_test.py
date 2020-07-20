@@ -20,10 +20,14 @@
 
 import logging
 import multiprocessing
+import os.path
+import tempfile
 import time
 import unittest
 import unittest.mock
 
+import microscope.clients
+import microscope.devices
 import microscope.deviceserver
 
 from microscope.devices import device
@@ -78,9 +82,9 @@ class BaseTestServeDevices(unittest.TestCase):
 
 class TestStarting(BaseTestServeDevices):
     DEVICES = [
-        device(TestCamera, '127.0.0.1', 8001, otherargs=1,),
+        device(TestCamera, '127.0.0.1', 8001, {'buffer_length' : 0}),
         device(TestFilterWheel, '127.0.0.1', 8003,
-               filters=[(0, 'GFP', 525), (1, 'RFP'), (2, 'Cy5')]),
+               {'filters' : [(0, 'GFP', 525), (1, 'RFP'), (2, 'Cy5')]}),
     ]
 
     def test_standard(self):
@@ -99,6 +103,60 @@ class TestInputCheck(BaseTestServeDevices):
         time.sleep(2)
         self.assertTrue(not self.p.is_alive(),
                         "not dying for empty list of devices")
+
+
+class DeviceWithPort(microscope.devices.Device):
+    def __init__(self, port, **kwargs):
+        super().__init__(**kwargs)
+        self._port = port
+
+    @property
+    def port(self):
+        return self._port
+
+    def _on_shutdown(self):
+        pass
+
+    def initialize(self):
+        pass
+
+
+class TestClashingArguments(BaseTestServeDevices):
+    """Device server and device constructor arguments do not clash"""
+    DEVICES = [
+        device(DeviceWithPort, '127.0.0.1', 8000, {'port' : 7000}),
+    ]
+    def test_port_conflict(self):
+        time.sleep(2)
+        client = microscope.clients.Client('PYRO:DeviceWithPort@127.0.0.1:8000')
+        self.assertEqual(client.port, 7000)
+
+
+class TestConfigLoader(unittest.TestCase):
+    def _test_load_source(self, filename):
+        file_contents = 'DEVICES = [1,2,3]'
+        with tempfile.TemporaryDirectory() as dirpath:
+            filepath = os.path.join(dirpath, filename)
+            with open(filepath, 'w') as fh:
+                fh.write(file_contents)
+
+            module = microscope.deviceserver._load_source(filepath)
+            self.assertEqual(module.DEVICES, [1, 2, 3])
+
+    def test_py_file_extension(self):
+        """Reading of config file module-like works"""
+        self._test_load_source('foobar.py')
+
+    def test_cfg_file_extension(self):
+        """Reading of config file does not require .py file extension"""
+        # Test for issue #151.  Many importlib functions assume that
+        # the file has importlib.machinery.SOURCE_SUFFIXES extension
+        # so we need a bit of extra work to work with none or .cfg.
+        self._test_load_source('foobar.cfg')
+
+    def test_no_file_extension(self):
+        """Reading of config file does not require file extension"""
+        self._test_load_source('foobar')
 
 
 if __name__ == '__main__':

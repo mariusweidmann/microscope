@@ -22,16 +22,20 @@ This class provides a wrapper for PYME's SDK3 interface that allows
 a camera and all its settings to be exposed over Pyro.
 """
 
+import logging
 import queue
 import time
 
-import Pyro4
 import numpy as np
 
 from microscope import devices
 from microscope.devices import keep_acquiring
+from microscope.devices import ROI
 
 from .SDK3Cam import *
+
+
+_logger = logging.getLogger(__name__)
 
 
 # SDK data pointer type
@@ -44,6 +48,85 @@ TRIGGER_MODES = {
     'external start': None,
     'external exposure': devices.TRIGGER_DURATION,
     'software': devices.TRIGGER_SOFT,
+}
+
+SDK_NAMES = {
+    "_accumulate_count" : "AccumulateCount",
+    "_acquisition_start" : "AcquisitionStart",
+    "_acquisition_stop" : "AcquisitionStop",
+    "_alternating_readout_direction" : "AlternatingReadoutDirection",
+    "_aoi_binning" : "AOIBinning",
+    "_aoi_height" : "AOIHeight",
+    "_aoi_left" : "AOILeft",
+    "_aoi_top" : "AOITop",
+    "_aoi_width" : "AOIWidth",
+    "_aoi_stride" : "AOIStride",
+    "_auxiliary_out_source" : "AuxiliaryOutSource",
+    "_aux_out_source_two" : "AuxOutSourceTwo",
+    "_baseline_level" : "BaselineLevel",
+    "_bit_depth" : "BitDepth",
+    "_buffer_overflow_event" : "BufferOverflowEvent",
+    "_bytes_per_pixel" : "BytesPerPixel",
+    "_camera_acquiring" : "CameraAcquiring",
+    "_camera_dump" : "CameraDump",
+    "_camera_model" : "CameraModel",
+    "_camera_name" : "CameraName",
+    "_camera_present" : "CameraPresent",
+    "_controller_id" : "ControllerId",
+    "_frame_count" : "FrameCount",
+    "_cycle_mode" : "CycleMode",
+    "_electronic_shuttering_mode" : "ElectronicShutteringMode",
+    "_event_enable" : "EventEnable",
+    "_events_missed_event" : "EventsMissedEvent",
+    "_event_selector" : "EventSelector",
+    "_exposed_pixel_height" : "ExposedPixelHeight",
+    "_exposure_time" : "ExposureTime",
+    "_exposure_end_event" : "ExposureEndEvent",
+    "_exposure_start_event" : "ExposureStartEvent",
+    "_external_trigger_delay" : "ExternalTriggerDelay",
+    "_fan_speed" : "FanSpeed",
+    "_firmware_version" : "FirmwareVersion",
+    "_frame_rate" : "FrameRate",
+    "_full_aoi_control" : "FullAOIControl",
+    "_image_size_bytes" : "ImageSizeBytes",
+    "_interface_type" : "InterfaceType",
+    "_io_invert" : "IoInvert",
+    "_io_selector" : "IoSelector",
+    "_line_scan_speed" : "LineScanSpeed",
+    "_lut_index" : "LutIndex",
+    "_lut_value" : "LutValue",
+    "_max_interface_transfer_rate" : "MaxInterfaceTransferRate",
+    "_metadata_enable" : "MetadataEnable",
+    "_metadata_timestamp" : "MetadataTimestamp",
+    "_metadata_frame" : "MetadataFrame",
+    "_overlap" : "Overlap",
+    "_pixel_encoding" : "PixelEncoding",
+    "_pixel_readout_rate" : "PixelReadoutRate",
+    "_pre_amp_gain_control" : "PreAmpGainControl",
+    "_readout_time" : "ReadoutTime",
+    "_rolling_shutter_global_clear" : "RollingShutterGlobalClear",
+    "_row_n_exposure_end_event" : "RowNExposureEndEvent",
+    "_row_n_exposure_start_event" : "RowNExposureStartEvent",
+    "_row_read_time" : "RowReadTime",
+    "_scan_speed_control_enable" : "ScanSpeedControlEnable",
+    "_sensor_cooling" : "SensorCooling",
+    "_sensor_height" : "SensorHeight",
+    "_sensor_readout_mode" : "SensorReadoutMode",
+    "_sensor_temperature" : "SensorTemperature",
+    "_sensor_width" : "SensorWidth",
+    "_serial_number" : "SerialNumber",
+    "_simple_pre_amp_gain_control" : "SimplePreAmpGainControl",
+    "_software_trigger" : "SoftwareTrigger",
+    "_static_blemish_correction" : "StaticBlemishCorrection",
+    "_spurious_noise_filter" : "SpuriousNoiseFilter",
+    "_target_sensor_temperature" : "TargetSensorTemperature",
+    "_temperature_control" : "TemperatureControl",
+    "_temperature_status" : "TemperatureStatus",
+    "_timestamp_clock" : "TimestampClock",
+    "_timestamp_clock_frequency" : "TimestampClockFrequency",
+    "_timestamp_clock_reset" : "TimestampClockReset",
+    "_trigger_mode" : "TriggerMode",
+    "_vertically_centre_aoi" : "VerticallyCentreAOI",
 }
 
 # Wrapper to ensure feature is readable.
@@ -80,15 +163,15 @@ ATEnum.get_index  = readable_wrapper(ATEnum.getIndex)
 ATEnum.set_index  = writable_wrapper(ATEnum.setIndex)
 ATEnum.get_string = readable_wrapper(ATEnum.getString)
 ATEnum.set_string = writable_wrapper(ATEnum.setString)
-ATEnum.get_available_values = readable_wrapper(ATEnum.getAvailableValues)
+ATEnum.get_available_values = readable_wrapper(ATEnum.getAvailableValueMap)
 ATProperty.is_readonly = lambda self: not SDK3.IsWritable(self.handle, self.propertyName)
 
-# Mapping of AT type to python type.
+# Mapping of AT type to microscope Setting type.
 PROPERTY_TYPES = {
-    ATInt: int,
-    ATBool: bool,
-    ATFloat: float,
-    ATString: str,
+    ATInt: 'int',
+    ATBool: 'bool',
+    ATFloat: 'float',
+    ATString: 'str',
     ATEnum: 'enum'
 }
 
@@ -96,15 +179,14 @@ INVALIDATES_BUFFERS = ['_simple_pre_amp_gain_control', '_pre_amp_gain_control',
                        '_aoi_binning', '_aoi_left', '_aoi_top',
                        '_aoi_width', '_aoi_height', ]
 
-@Pyro4.behavior('single')
+
 class AndorSDK3(devices.FloatingDeviceMixin,
                 devices.CameraDevice):
     SDK_INITIALIZED = False
-    def __init__(self, *args, **kwargs):
-        super(AndorSDK3, self).__init__(**kwargs)
+    def __init__(self, index=0, **kwargs):
+        super().__init__(index=index, **kwargs)
         if not AndorSDK3.SDK_INITIALIZED:
             SDK3.InitialiseLibrary()
-        self._index = kwargs.get('index', 0)
         self.handle = None
         #self._sdk3cam = SDK3Camera(self._index)
         #SDK3Camera.__init__(self, self._index)
@@ -244,7 +326,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
 
     def _purge_buffers(self):
         """Purge buffers on both camera and PC."""
-        self._logger.debug("Purging buffers.")
+        _logger.debug("Purging buffers.")
         self._buffers_valid = False
         if self._acquiring:
             raise Exception ('Can not modify buffers while camera acquiring.')
@@ -262,7 +344,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
         if num is None:
             num = self.num_buffers
         self._purge_buffers()
-        self._logger.debug("Creating %d buffers." % num)
+        _logger.debug("Creating %d buffers.", num)
         self._img_stride = self._aoi_stride.get_value()
         self._img_width = self._aoi_width.get_value()
         self._img_height = self._aoi_height.get_value()
@@ -294,7 +376,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
             ptr, length = SDK3.WaitBuffer(self.handle, timeout)
         except SDK3.TimeoutError as e:
             if debug:
-                self._logger.debug(e)
+                _logger.debug(e)
             return None
         except Exception:
             raise
@@ -302,7 +384,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
         width = self._img_width
         height = self._img_height
         data = raw#.reshape((-1, bytes_per_row))[:, 0:width].copy()
-        data = np.empty((width, height), dtype='uint16')
+        data = np.empty((height, width), dtype='uint16')
         SDK3.ConvertBuffer(ptr, data.ctypes.data_as(DPTR_TYPE),
                            width, height,
                            self._img_stride, self._img_encoding, 'Mono16')
@@ -317,7 +399,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
 
     def abort(self):
         """Abort acquisition."""
-        self._logger.debug('Disabling acquisition.')
+        _logger.debug('Disabling acquisition.')
         if self._acquiring:
             self._acquisition_stop()
 
@@ -333,8 +415,8 @@ class AndorSDK3(devices.FloatingDeviceMixin,
         if self.handle == None:
             raise Exception("No camera opened.")
         for name, var in sorted(self.__dict__.items()):
-            sdk_name = name.replace('_', '')
             if isinstance(var, ATProperty):
+                sdk_name = SDK_NAMES[name]
                 if not SDK3.IsImplemented(self.handle, sdk_name):
                     delattr(self, name)
                     continue
@@ -365,8 +447,12 @@ class AndorSDK3(devices.FloatingDeviceMixin,
                                  get_func, set_func, vals_func, is_readonly_func)
         # Default setup.
         self.set_cooling(True)
-        self._trigger_mode.set_string('Software')
-        self._cycle_mode.set_string('Continuous')
+        if not self._camera_model.getValue().startswith('SIMCAM'):
+            self._trigger_mode.set_string('Software')
+            self._cycle_mode.set_string('Continuous')
+        else:
+            _logger.warn("No hardware found - using SIMCAM")
+
 
         def callback(*args):
             data = self._fetch_data(timeout=500)
@@ -403,7 +489,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
         self._buffers_valid = False
 
     def _on_enable(self):
-        self._logger.debug("Preparing for acquisition.")
+        _logger.debug("Preparing for acquisition.")
         if self._acquiring:
             self._acquisition_stop()
         self._create_buffers()
@@ -411,7 +497,7 @@ class AndorSDK3(devices.FloatingDeviceMixin,
             self._acquisition_start()
         except Exception as e:
             raise Exception(str(e))
-        self._logger.debug("Acquisition enabled: %s." % self._acquiring)
+        _logger.debug("Acquisition enabled: %s.", self._acquiring)
         return True
 
     @keep_acquiring
@@ -421,8 +507,8 @@ class AndorSDK3(devices.FloatingDeviceMixin,
                       value))[1]
         self._exposure_time.set_value(bounded_value)
         self._frame_rate.set_value(self._frame_rate.max())
-        self._logger.debug("Set exposure time to %f, resulting framerate %f."
-                          % (bounded_value, self._frame_rate.get_value()))
+        _logger.debug("Set exposure time to %f, resulting framerate %f.",
+                      bounded_value, self._frame_rate.get_value())
 
     def get_exposure_time(self):
         return self._exposure_time.get_value()
@@ -445,9 +531,9 @@ class AndorSDK3(devices.FloatingDeviceMixin,
         return tuple(int(t) for t in as_text)
 
     @keep_acquiring
-    def _set_binning(self, h, v):
+    def _set_binning(self, binning):
         modes = self._aoi_binning.get_available_values()
-        as_text = '%dx%d' % (h,v)
+        as_text = '%dx%d' % (binning.h, binning.v)
         if as_text in modes:
             self._aoi_binning.set_string(as_text)
             self._create_buffers()
@@ -456,26 +542,26 @@ class AndorSDK3(devices.FloatingDeviceMixin,
             return False
 
     def _get_roi(self):
-        return (self._aoi_left.get_value(),
-                self._aoi_top.get_value(),
-                self._aoi_width.get_value(),
-                self._aoi_height.get_value())
+        return ROI(self._aoi_left.get_value(),
+                   self._aoi_top.get_value(),
+                   self._aoi_width.get_value(),
+                   self._aoi_height.get_value())
 
     @keep_acquiring
-    def _set_roi(self, x, y, width, height):
+    def _set_roi(self, roi):
         current = self.get_roi()
         if self._acquiring:
             self.abort()
         try:
-            self._aoi_width.set_value(width)
-            self._aoi_height.set_value(height)
-            self._aoi_left.set_value(x)
-            self._aoi_top.set_value(y)
+            self._aoi_width.set_value(roi.width)
+            self._aoi_height.set_value(roi.height)
+            self._aoi_left.set_value(roi.left)
+            self._aoi_top.set_value(roi.top)
         except:
-            self._aoi_width.set_value(current[2])
-            self._aoi_height.set_value(current[3])
-            self._aoi_left.set_value(current[0])
-            self._aoi_top.set_value(current[1])
+            self._aoi_width.set_value(current.width)
+            self._aoi_height.set_value(current.height)
+            self._aoi_left.set_value(current.left)
+            self._aoi_top.set_value(current.top)
             return False
         return True
 

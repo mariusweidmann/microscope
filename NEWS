@@ -1,11 +1,165 @@
 The following is a summary of the user-visible changes for each of
 python-microscope releases.
 
-Version 0.3.0 (yyyy/mm/dd)
+Version 0.6.0 (upcoming)
+------------------------
+
+* New `TestStage` and `TestStageAxis` classes.
+
+
+Version 0.5.0 (2020/03/10)
 --------------------------
 
-* Python 3.5 or later is now required.  Python 2 is no longer
-  supported.  This drops the dependency on the six and enum34.
+* New devices supported:
+
+  * CoolLED pE-300 series.
+
+* Changes to device ABCs:
+
+  * New ABCs `StageDevice` and `StageAxis`.
+
+* Device specific changes:
+
+  * Ximea Camera:
+
+    * Instead of device id (`dev_id`), the constructor now requires
+      the camera serial number.  This is required only if there are
+      multiple Ximea cameras on the system.
+
+    * Support for hardware triggers was completely rewritten and now
+      implements the `TriggerTargetMixIn` interface.  The default
+      trigger type is now software only; previously it would default
+      to trigger on rising edge while simultaneously accepting
+      software trigers.  In addition to the `TriggerTargetMixIn`
+      interface, the trigger type can also be set via the 'trigger
+      source' setting.
+
+    * Added support for ROIs and temperature readings.
+
+  * AndorSDK3 (Andor CMOS cameras):
+
+    * Fixed acquisition of non-square images.
+
+  * AndorAtmcd (Andor (EM)CCD cameras):
+
+    * Fixed 0.4.0 regression on its settings that caused
+      initialization to always fail.
+
+
+Version 0.4.0 (2020/01/07)
+--------------------------
+
+* Selected most important, backwards incompatible, changes:
+
+  * The `Setting` class is now private.  The only supported method to
+    add settings to a `Device` is via its `add_setting` method.
+
+* New devices supported:
+
+  * Coherent Obis laser
+  * Lumencor Spectra III light engine
+  * Prior ProScan III controller
+  * Prior filter wheels
+  * Toptica iBeam laser
+
+* Changes to device ABCs:
+
+  * Device:
+
+    * The `Device._logger` attribute has been removed.  It is
+      recommended to use a logger for the module.
+
+  * DeformableMirror:
+
+    * Concrete classes must implement the `n_actuators` public
+      property instead of the private _n_actuators`.
+
+* Device specific changes:
+
+  * Ximea Camera:
+
+    * Support for the ximea cameras was completely rewritten to
+      support hardware triggers, as well as fix multiple minor issues.
+
+* The device server and clients no longer force pickle protocol
+  version 2.  If the client and server are running different Python
+  versions it may be necessary to specify a version number.  This
+  should be done on the side with the highest support version number
+  by setting `Pyro4.config.PICKLE_PROTOCOL_VERSION`.
+
+
+Version 0.3.0 (2019/11/07)
+--------------------------
+
+* Selected most important, backwards incompatible, changes:
+
+  * `microscope.device`, function used to create a device definition,
+    changed signature.  The arguments to the device constructor must
+    now be passed as a dictionary.
+
+  * Python 2 is no longer supported.
+
+  * New requirements:
+
+    * Python >= 3.5
+    * hidapi
+
+* New devices supported:
+
+  * Andor (EM)CCD cameras (requires Andor's atmcd C library)
+  * Aurox Clarity (requires hidapi Python package)
+  * Imagine Optic Mirao 52-e deformable mirror (requires mirao52e C library)
+  * Linkam Correlative Microscopy Stage (requires LinkamSDK C library)
+  * Ximea cameras (requires Ximea's xiAPI Python package)
+
+* Changes to device ABCs:
+
+  * New ABC `ControllerDevice` for controller devices.
+
+  * Laser devices:
+
+    * New abstract methods:
+
+      * `LaserDevice.get_min_power_mw`
+      * `LaserDevice.is_alive`
+
+    * `LaserDevice.set_power_mw` now clips the set value to the device
+      actual range.  Previously, the behaviour was undefined and
+      device specific.
+
+  * Camera devices:
+
+    * Added ROIs and binning support.
+
+    * New abstract methods:
+
+      * `CameraDevice._get_binning`
+      * `CameraDevice._get_roi`
+      * `CameraDevice._set_binning`
+      * `CameraDevice._set_roi`
+
+  * DataDevices:
+
+    * Data clients are now on a stack to facilitate temporary
+      redirection of data to some other client.
+
+  * Filterwheel devices:
+
+    * New method `FilterWheelBase.get_num_positions`
+
+    * New abstract methods:
+
+      * `FilterWheelBase.get_position`
+      * `FilterWheelBase.set_position`
+
+* Device specific changes:
+
+  * Omicron TA Deepstar laser:
+
+    * Now returns actual laser power instead of the set laser power.
+      Requires device to be fitted with the APC option.
+
+  * Test camera:
 
 * New hardware supported:
 
@@ -13,17 +167,18 @@ Version 0.3.0 (yyyy/mm/dd)
 
 * `CoboltLaser` now has a default value for its `baud` argument.
 
-* `LaserDevice.set_power_mw` now clips the set value to the device
-  actual range.  Previously, the behaviour was undefined.
+* Removed requirements:
 
-* Added Device server support for Windows services.
+  * enum34
+  * six
 
-* DataDevices now handle a stack of clients to receive data.
+* The `deviceserver` program can now be used as a Windows service.
 
-* New abstract methods:
+* Fixed PyPI releases to include the `microscope.mirrorq and
+  `microscope.filterwheels` subpackages.
 
-  * `LaserDevice.get_min_power_mw`
-  * `LaserDevice.is_alive`
+* New `microscope.devices.ROI` and `microscope.devices.Binning`
+  classes to represent those camera settings.
 
 
 Version 0.2.0 (2018/06/13)
