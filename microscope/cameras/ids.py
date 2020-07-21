@@ -324,10 +324,10 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         self._trigger_mode = tmode
 
 
-    def trigger_type(self) -> TriggerType:
+    def trigger_type(self):
         raise NotImplementedError()
 
-    def trigger_mode(self) -> TriggerMode:
+    def trigger_mode(self):
         raise NotImplementedError()    
 
     def get_cycle_time(self) -> float:
