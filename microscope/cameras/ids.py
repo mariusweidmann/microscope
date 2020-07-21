@@ -323,6 +323,13 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
         self._trigger_mode = tmode
 
+
+    def trigger_type(self) -> TriggerType:
+        raise NotImplementedError()
+
+    def trigger_mode(self) -> TriggerMode:
+        raise NotImplementedError()    
+
     def get_cycle_time(self) -> float:
         ## It is possible to set a delay time between the arrival of a
         ## trigger signal and the start of exposure.  Because we don't
