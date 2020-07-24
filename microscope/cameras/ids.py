@@ -30,6 +30,8 @@ import ctypes
 import typing
 from typing import Tuple
 
+import logging
+
 import Pyro4
 import numpy as np
 
@@ -37,6 +39,10 @@ import microscope.devices
 from microscope._wrappers import ueye
 
 import platform
+import sys
+
+_logger = logging.getLogger(__name__)
+
 if platform.system() == 'Windows':
     import win32event
     import win32api
@@ -126,14 +132,22 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
         ## Having a fixed buffer that we keep reusing is good enough
         ## while we don't support ROIs, binning, and hardware trigges.
+        #ueye.SetColorMode(self._handle, ueye.CM_MONO16) ## FIXME <-- make dynamic, check _fetch_data also! 
         colourmode = ueye.SetColorMode(self._handle, ueye.GET_COLOR_MODE)
         dtype = _COLOURMODE_TO_DTYPE[colourmode]
         self._buffer = np.empty(self._sensor_shape[::-1], dtype=dtype)
         buffer_p = self._buffer.ctypes.data_as(ctypes.POINTER(ctypes.c_char))
         mem_id = ctypes.c_int()
-        status = ueye.SetAllocatedImageMem(self._handle, *self._sensor_shape,
+        #status = ueye.SetAllocatedImageMem(self._handle, *self._sensor_shape,
+        #                                   self._buffer.itemsize * 8, buffer_p,
+        #                                   mem_id)
+        
+        status = ueye.SetAllocatedImageMem(self._handle, 
+                                           self._sensor_shape[0],
+                                           self._sensor_shape[1],
                                            self._buffer.itemsize * 8, buffer_p,
                                            mem_id)
+
         if status != ueye.SUCCESS:
             raise RuntimeError()
         status = ueye.SetImageMem(self._handle, buffer_p, mem_id)
@@ -167,14 +181,14 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
                                        % status)
 
 
-    def enable(self) -> None:
+    #def enable(self) -> None:
         ## FIXME: parent only sets to return of _on_enable, but should
         ## probably do it unless there's an error?
-        super().enable()
-        self.enabled = True
+        #super().enable()
+        #self.enabled = True
 
 
-    def _on_enable(self) -> None:
+    def _on_enable(self):
         ## FIXME: if a software trigger was sent while the camera was
         ## disable, the acquisition will happen now.  Maybe if we free
         ## the image memory during disable, and only set it again
@@ -183,7 +197,10 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
             status = ueye.CameraStatus(self._handle, ueye.STANDBY, ueye.FALSE)
             if status != ueye.SUCCESS:
                 raise RuntimeError('failed to enter standby')
-
+            _logger.debug("uEye now no longer in standby")
+        else:
+            _logger.info("uEye does not seem to support standy")
+        return True
 
     def _on_disable(self) -> None:
         if not self.enabled:
@@ -194,6 +211,10 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
             if status != ueye.SUCCESS:
                 raise RuntimeError('failed to enter standby')
             self.enabled = False
+            _logger.debug("uEye now in standby")
+        else:
+            _logger.info("uEye does not seem to support standby")
+
 
 
     def get_exposure_time(self) -> float:
@@ -223,7 +244,15 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         ## framerate of 50 fps, the exposure time is between 0.09 and
         ## 150 milliseconds while with pixel clock at 474 MHz the
         ## range is between 0.02 and 10.14 milliseconds.
-        raise NotImplementedError()
+        
+        #raise NotImplementedError()
+        time_msec = ctypes.c_double(value)
+        status = ueye.Exposure( self._handle, ueye.EXPOSURE_CMD.SET_EXPOSURE,
+                            ctypes.cast(ctypes.byref(time_msec), 
+                                        ctypes.c_void_p),
+                            ctypes.sizeof(time_msec))
+        
+        _logger.info("uEye exp. time set to %f" % (time_msec.value))
 
 
     def _get_sensor_shape(self) -> Tuple[int, int]:
@@ -354,13 +383,15 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         return self.get_exposure_time() +  min_frame_duration.value
 
 
-    def _fetch_data(self) -> typing.Optional[np.ndarray]:
+    def _fetch_data(self): #-> typing.Optional[np.ndarray]:
         ## FIXME: this is enough for software trigger and "slow"
         ## acquisition rates.  To achive faster speeds we need to set
         ## a ring buffer and maybe consider making use of freerun
         ## mode.
+        #_logger.debug("uEye fetch data")
         if self._h_event is None:
             return None
+        #_logger.debug("uEye wait event")
 
         if platform.system() == 'Windows':
             status = win32event.WaitForSingleObject(self._h_event, 1)
@@ -373,17 +404,18 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
         elif platform.system() == 'Linux':
             status = ueye.WaitEvent(self._handle, ueye.SET_EVENT_FRAME, 1)
-
+        
             if status == ueye.TIMED_OUT:
                 return None
-
+        
             if status != ueye.SUCCESS:
                 raise RuntimeError('failed to disable event')
-
+        
         else:
             raise SystemError()
 
-        data = self._buffer.copy()
+        #_logger.debug("uEye data copy")
+        data = self._buffer.copy() ## FIXME <- proper types here
         status = ueye.DisableEvent(self._handle, ueye.SET_EVENT_FRAME)
         if status != ueye.SUCCESS:
             raise RuntimeError()
@@ -400,22 +432,24 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
 
 
     def trigger(self) -> None:
+        #_logger.debug("uEye Trigger")
         if self._trigger_type != microscope.devices.TriggerType.SOFTWARE:
             raise RuntimeError("current trigger type is '%s', not SOFTWARE"
                                % self._trigger_type)
 
         self._h_event = None
         if platform.system() == 'Windows':
-            self._h_event = win32event.CreateEvent(None, False, False, None)
-            self.event = ctypes.wintypes.HANDLE(int(self._h_event))
-            ueye.InitEvent(self._handle, self.event, ueye.SET_EVENT_FRAME)
+           self._h_event = win32event.CreateEvent(None, False, False, None)
+           self.event = ctypes.wintypes.HANDLE(int(self._h_event))
+           ueye.InitEvent(self._handle, self.event, ueye.SET_EVENT_FRAME)
 
         ## XXX: to support START/STROBE modes, I think we need to call
         ## CaptureVideo instead.
         status = ueye.EnableEvent(self._handle, ueye.SET_EVENT_FRAME)
         if status != ueye.SUCCESS:
             raise RuntimeError()
-        status = ueye.FreezeVideo(self._handle, ueye.DONT_WAIT)
+        #status = ueye.FreezeVideo(self._handle, ueye.DONT_WAIT)
+        status = ueye.FreezeVideo(self._handle, ueye.WAIT)
         if status != ueye.SUCCESS:
             ## if status == 108, it's because there is no active memory
             raise RuntimeError('failed to give software trigger (error %d)'
@@ -451,6 +485,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         status = ueye.GetSensorInfo(self._handle, ctypes.byref(sensor_info))
         if status != ueye.SUCCESS:
             raise RuntimeError('failed to to read the sensor information')
+        _logger.debug("Sensor shape w %d h %d" % (sensor_info.nMaxWidth, sensor_info.nMaxHeight))
         return (sensor_info.nMaxWidth, sensor_info.nMaxHeight)
 
 
