@@ -383,7 +383,7 @@ class IDSuEye(microscope.devices.TriggerTargetMixIn,
         return self.get_exposure_time() +  min_frame_duration.value
 
 
-    def _fetch_data(self): #-> typing.Optional[np.ndarray]:
+    def _fetch_data(self) -> typing.Optional[np.ndarray]:
         ## FIXME: this is enough for software trigger and "slow"
         ## acquisition rates.  To achive faster speeds we need to set
         ## a ring buffer and maybe consider making use of freerun
